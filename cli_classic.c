@@ -25,14 +25,11 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <getopt.h>
-#include "big_lock.h"
 #include "flash.h"
 #include "flashchips.h"
 #include "fmap.h"
 #include "power.h"
 #include "programmer.h"
-
-#define LOCK_TIMEOUT_SECS	180
 
 #include "libflashrom.h"
 
@@ -1037,17 +1034,6 @@ int main(int argc, char *argv[])
 		}
 	}
 
-#if USE_BIG_LOCK == 1
-	/* get lock before doing any work that touches hardware */
-	msg_gdbg("Acquiring lock (timeout=%d sec)...\n", LOCK_TIMEOUT_SECS);
-	if (acquire_big_lock(LOCK_TIMEOUT_SECS) < 0) {
-		msg_gerr("Could not acquire lock.\n");
-		ret = 1;
-		goto out;
-	}
-	msg_gdbg("Lock acquired.\n");
-#endif
-
 	if (programmer_init(prog, pparam)) {
 		msg_perr("Error: Programmer initialization failed.\n");
 		ret = 1;
@@ -1343,9 +1329,6 @@ out_shutdown:
 	flashrom_programmer_shutdown(NULL);
 out:
 
-#if USE_BIG_LOCK == 1
-	release_big_lock();
-#endif
 	if (restore_power_management()) {
 		msg_gerr("Unable to re-enable power management\n");
 		ret |= 1;

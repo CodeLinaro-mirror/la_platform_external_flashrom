@@ -37,9 +37,19 @@
 #include "action_descriptor.h"
 #include "spi.h"
 #include "power.h"
+#include "big_lock.h"
 
 const char flashrom_version[] = FLASHROM_VERSION;
 const char *chip_to_probe = NULL;
+
+#ifndef USE_BIG_LOCK
+#define USE_BIG_LOCK 0
+#endif
+
+#define LOCK_TIMEOUT_SECS 180
+
+/** Big lock acquisition status. */
+static bool g_big_lock_acquired = false;
 
 static const struct programmer_entry *programmer = NULL;
 
@@ -132,11 +142,29 @@ static int deregister_chip_restore(struct flashctx *flash)
 int programmer_init(const struct programmer_entry *prog, const char *param)
 {
 	int ret;
+#if CONFIG_DUMMY == 1
+	const struct programmer_entry *dummy_programmer = &programmer_dummy;
+#else
+	const struct programmer_entry *dummy_programmer = NULL;
+#endif
 
 	if (prog == NULL) {
 		msg_perr("Invalid programmer specified!\n");
 		return -1;
 	}
+
+	/* Only acquire the big lock for non-dummy programmer. */
+	if (USE_BIG_LOCK && prog != dummy_programmer) {
+		/* Get big lock before doing any work that touches hardware. */
+		msg_gdbg("Acquiring lock (timeout=%d sec)...\n", LOCK_TIMEOUT_SECS);
+		if (acquire_big_lock(LOCK_TIMEOUT_SECS) < 0) {
+			msg_gerr("Could not acquire lock.\n");
+			return 1;
+		}
+		g_big_lock_acquired = true;
+		msg_gdbg("Lock acquired.\n");
+	}
+
 	programmer = prog;
 	/* Initialize all programmer specific data. */
 	/* Default to unlimited decode sizes. */
@@ -184,6 +212,13 @@ int programmer_init(const struct programmer_entry *prog, const char *param)
 		}
 	}
 	free(cfg.params);
+
+	/* Release lock if initialization is not succseeful. */
+	if (USE_BIG_LOCK && ret != 0 && g_big_lock_acquired) {
+		release_big_lock();
+		g_big_lock_acquired = false;
+	}
+
 	return ret;
 }
 
@@ -203,6 +238,11 @@ int programmer_shutdown(void)
 		ret |= shutdown_fn[i].func(shutdown_fn[i].data);
 	}
 	registered_master_count = 0;
+
+	if (USE_BIG_LOCK && g_big_lock_acquired) {
+		release_big_lock();
+		g_big_lock_acquired = false;
+	}
 
 	return ret;
 }
