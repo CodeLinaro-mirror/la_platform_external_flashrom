@@ -48,9 +48,6 @@ const char *chip_to_probe = NULL;
 
 #define LOCK_TIMEOUT_SECS 180
 
-/** Big lock acquisition status. */
-static bool g_big_lock_acquired = false;
-
 static const struct programmer_entry *programmer = NULL;
 
 /*
@@ -156,13 +153,8 @@ int programmer_init(const struct programmer_entry *prog, const char *param)
 	/* Only acquire the big lock for non-dummy programmer. */
 	if (USE_BIG_LOCK && prog != dummy_programmer) {
 		/* Get big lock before doing any work that touches hardware. */
-		msg_gdbg("Acquiring lock (timeout=%d sec)...\n", LOCK_TIMEOUT_SECS);
-		if (acquire_big_lock(LOCK_TIMEOUT_SECS) < 0) {
-			msg_gerr("Could not acquire lock.\n");
+		if (acquire_big_lock(LOCK_TIMEOUT_SECS) < 0)
 			return 1;
-		}
-		g_big_lock_acquired = true;
-		msg_gdbg("Lock acquired.\n");
 	}
 
 	programmer = prog;
@@ -214,10 +206,8 @@ int programmer_init(const struct programmer_entry *prog, const char *param)
 	free(cfg.params);
 
 	/* Release lock if initialization is not succseeful. */
-	if (USE_BIG_LOCK && ret != 0 && g_big_lock_acquired) {
+	if (USE_BIG_LOCK && ret != 0)
 		release_big_lock();
-		g_big_lock_acquired = false;
-	}
 
 	return ret;
 }
@@ -239,10 +229,8 @@ int programmer_shutdown(void)
 	}
 	registered_master_count = 0;
 
-	if (USE_BIG_LOCK && g_big_lock_acquired) {
+	if (USE_BIG_LOCK)
 		release_big_lock();
-		g_big_lock_acquired = false;
-	}
 
 	return ret;
 }

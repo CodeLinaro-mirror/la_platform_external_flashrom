@@ -28,18 +28,36 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <stdbool.h>
+
 #include "big_lock.h"
 #include "ipc_lock.h"
+#include "flash.h"
 
 #define LOCKFILE_NAME		"firmware_utility_lock"
 static struct ipc_lock big_lock = LOCKFILE_INIT(LOCKFILE_NAME);
+/** Big lock acquisition status. */
+static bool g_big_lock_acquired = false;
 
 int acquire_big_lock(int timeout_secs)
 {
-	return acquire_lock(&big_lock, timeout_secs * 1000);
+	msg_gdbg("Acquiring lock (timeout=%d sec)...\n", timeout_secs);
+	int ret = acquire_lock(&big_lock, timeout_secs * 1000);
+	if (ret < 0) {
+		msg_gerr("Could not acquire lock.\n");
+	} else {
+		g_big_lock_acquired = true;
+		msg_gdbg("Lock acquired.\n");
+	}
+	return ret;
 }
 
 int release_big_lock(void)
 {
-	return release_lock(&big_lock);
+	int ret = 0;
+	if (g_big_lock_acquired) {
+		ret = release_lock(&big_lock);
+		g_big_lock_acquired = false;
+	}
+	return ret;
 }
