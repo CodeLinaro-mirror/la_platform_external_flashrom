@@ -369,38 +369,21 @@ static int cros_ec_wp_is_enabled(void)
 }
 
 /*
- * Prepare EC for update:
- * - Disable soft WP if needed.
- * - Parse flashmap.
- * - Jump to RO firmware.
+ * If HW WP is disabled we may still need to disable write protection
+ * that is active on the EC. Otherwise the EC can reject erase/write
+ * commands.
+ *
+ * Failure is OK since HW WP might be enabled or the EC needs to be
+ * rebooted for the change to take effect. We can still update RW
+ * portions.
+ *
+ * If disabled here, EC WP will be restored at the end so that
+ * "--wp-enable" does not need to be run later. This greatly
+ * simplifies logic for developers and scripts.
  */
-int cros_ec_prepare(struct flashctx *flash, uint8_t *image, int size)
+static int disable_soft_wp_if_needed(struct flashctx *flash)
 {
-	struct fmap *fmap = NULL;
-	unsigned i, j;
-	int wp_status;
-
-	if (!(cros_ec_priv && cros_ec_priv->detected)) return 0;
-
-	if (ec_check_features(EC_FEATURE_RWSIG) > 0) {
-		rwsig_enabled = 1;
-		msg_pdbg("EC has RWSIG enabled.\n");
-	}
-
-	/*
-	 * If HW WP is disabled we may still need to disable write protection
-	 * that is active on the EC. Otherwise the EC can reject erase/write
-	 * commands.
-	 *
-	 * Failure is OK since HW WP might be enabled or the EC needs to be
-	 * rebooted for the change to take effect. We can still update RW
-	 * portions.
-	 *
-	 * If disabled here, EC WP will be restored at the end so that
-	 * "--wp-enable" does not need to be run later. This greatly
-	 * simplifies logic for developers and scripts.
-	 */
-	wp_status = cros_ec_wp_is_enabled();
+	int wp_status = cros_ec_wp_is_enabled();
 	if (wp_status < 0) {
 		return 1;
 	} else if (wp_status == 1) {
@@ -427,6 +410,29 @@ int cros_ec_prepare(struct flashctx *flash, uint8_t *image, int size)
 	} else {
 		msg_pdbg("EC soft WP is already disabled.\n");
 	}
+	return 0;
+}
+
+/*
+ * Prepare EC for update:
+ * - Disable soft WP if needed.
+ * - Parse flashmap.
+ * - Jump to RO firmware.
+ */
+int cros_ec_prepare(struct flashctx *flash, uint8_t *image, int size)
+{
+	struct fmap *fmap = NULL;
+	unsigned i, j;
+
+	if (!(cros_ec_priv && cros_ec_priv->detected)) return 0;
+
+	if (ec_check_features(EC_FEATURE_RWSIG) > 0) {
+		rwsig_enabled = 1;
+		msg_pdbg("EC has RWSIG enabled.\n");
+	}
+
+	if (disable_soft_wp_if_needed(flash))
+		return 1;
 
 	// Parse the fmap in the image file and cache the firmware ranges.
 	if (!fmap_read_from_buffer(&fmap, image, size)) {
