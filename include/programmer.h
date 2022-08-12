@@ -55,7 +55,7 @@ struct programmer_entry {
 		const char *const note;
 	} devs;
 
-	int (*init) (void);
+	int (*init) (const struct programmer_cfg *cfg);
 
 	void *(*map_flash_region) (const char *descr, uintptr_t phys_addr, size_t len);
 	void (*unmap_flash_region) (void *virt_addr, size_t len);
@@ -287,7 +287,7 @@ extern int force_boardmismatch;
 void probe_superio(void);
 int register_superio(struct superio s);
 extern enum chipbustype internal_buses_supported;
-int internal_init(void);
+int internal_init(const struct programmer_cfg *cfg);
 #endif
 
 /* bitbang_spi.c */
@@ -394,7 +394,7 @@ int init_superio_ite(void);
 
 #if CONFIG_LINUX_MTD == 1
 /* trivial wrapper to avoid cluttering internal_init() with #if */
-static inline int try_mtd(void) { return programmer_linux_mtd.init(); };
+static inline int try_mtd(void) { return programmer_linux_mtd.init(NULL); };
 #else
 static inline int try_mtd(void) { return 1; };
 #endif
@@ -490,7 +490,7 @@ typedef int fdtype;
  *
  * @return 0 if found correct, non-zero if not found or error
  */
-int cros_ec_probe_dev(void);
+int cros_ec_probe_dev(const struct programmer_cfg *cfg);
 int cros_ec_need_2nd_pass(void);
 int cros_ec_finish(void);
 int cros_ec_prepare(struct flashctx *flash, uint8_t *image, int size);

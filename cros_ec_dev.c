@@ -422,11 +422,12 @@ static void cros_ec_set_max_size(struct cros_ec_priv *priv, struct opaque_master
  * CrOS EC hangs off the "internal programmer" (AP, PCH, etc) this gets
  * run during internal programmer initialization.
  */
-static int cros_ec_parse_param(struct cros_ec_priv *priv)
+static int cros_ec_parse_param(const struct programmer_cfg *cfg,
+                               struct cros_ec_priv *priv)
 {
 	char *p;
 
-	p = extract_programmer_param_str("type");
+	p = extract_programmer_param_str(cfg, "type");
 	if (p) {
 		unsigned int index;
 		for (index = 0; index < ARRAY_SIZE(ec_type); index++)
@@ -442,7 +443,7 @@ static int cros_ec_parse_param(struct cros_ec_priv *priv)
 	}
 	free(p);
 
-	p = extract_programmer_param_str("block");
+	p = extract_programmer_param_str(cfg, "block");
 	if (p) {
 		unsigned int block;
 		char *endptr = NULL;
@@ -466,7 +467,7 @@ static int cros_ec_parse_param(struct cros_ec_priv *priv)
 	}
 	free(p);
 
-	p = extract_programmer_param_str("max_response_size");
+	p = extract_programmer_param_str(cfg, "max_response_size");
 	if (p) {
 		unsigned int max_response_size;
 		char *endptr = NULL;
@@ -556,11 +557,11 @@ int programming_ec(void)
 	return ec_alias_path;
 }
 
-int cros_ec_probe_dev(void)
+int cros_ec_probe_dev(const struct programmer_cfg *cfg)
 {
 	char dev_path[32];
 
-	if (cros_ec_parse_param(&cros_ec_dev_priv))
+	if (cros_ec_parse_param(cfg, &cros_ec_dev_priv))
 		return 1;
 
 	snprintf(dev_path, sizeof(dev_path), "%s%s",

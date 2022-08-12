@@ -17,10 +17,10 @@
 #include "programmer.h"
 #include "hwaccess_physmap.h"
 
-static int cros_host_alias_init(void)
+static int cros_host_alias_init(const struct programmer_cfg *cfg)
 {
 	msg_pdbg("%s(): Redirecting dispatch -> internal_init().\n", __func__);
-	return internal_init();
+	return internal_init(cfg);
 }
 
 const struct programmer_entry programmer_google_host_alias = {
