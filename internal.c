@@ -297,7 +297,7 @@ int internal_init(const struct programmer_cfg *cfg)
 	/* try to enable it. Failure IS an option, since not all motherboards
 	 * really need this to be done, etc., etc.
 	 */
-	ret = chipset_flash_enable();
+	ret = chipset_flash_enable(cfg);
 	if (ret == -2) {
 		msg_perr("WARNING: No chipset found. Flash detection "
 			 "will most likely fail.\n");
