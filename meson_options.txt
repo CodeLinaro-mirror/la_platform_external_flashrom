@@ -4,6 +4,7 @@ option('classic_cli', type : 'feature', value : 'enabled', description : 'classi
 option('classic_cli_print_wiki', type : 'feature', value : 'disabled',  description : 'Print Wiki')
 option('default_programmer_name', type : 'string', description : 'default programmer')
 option('default_programmer_args', type : 'string', description : 'default programmer arguments')
+option('ich_descriptors_tool', type : 'feature', value : 'auto', description : 'Build ich_descriptors_tool')
 
 option('config_atahpt', type : 'boolean', value : false, description : 'Highpoint (HPT) ATA/RAID controllers')
 option('config_atapromise', type : 'boolean', value : false, description : 'Promise ATA controller')

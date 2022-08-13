@@ -516,7 +516,9 @@ if get_option('classic_cli').auto() or get_option('classic_cli').enabled()
   )
 endif
 
-#subdir('util')
+if get_option('ich_descriptors_tool').auto() or get_option('ich_descriptors_tool').enabled()
+  subdir('util/ich_descriptors_tool')
+endif
 
 # Use `.auto() or .enabled()` instead of `.allowed()` to keep the minimum meson version as low as possible.
 # `.allowed()` gets introduced in 0.59.0
