@@ -481,6 +481,35 @@ static int check_erased_range(struct flashctx *flash, unsigned int start, unsign
 	return ret;
 }
 
+/* special unit-test hook */
+read_func_t *g_test_read_injector;
+
+static read_func_t *lookup_read_func_ptr(const struct flashchip *chip)
+{
+	switch (chip->read) {
+		case SPI_CHIP_READ: return &spi_chip_read;
+		case READ_OPAQUE: return &read_opaque;
+		case READ_MEMMAPPED: return &read_memmapped;
+		case EDI_CHIP_READ: return &edi_chip_read;
+		case SPI_READ_AT45DB: return spi_read_at45db;
+		case SPI_READ_AT45DB_E8: return spi_read_at45db_e8;
+		case TEST_READ_INJECTOR: return g_test_read_injector;
+	/* default: total function, 0 indicates no read function set.
+	 * We explicitly do not want a default catch-all case in the switch
+	 * to ensure unhandled enum's are compiler warnings.
+	 */
+		case NO_READ_FUNC: return NULL;
+	};
+
+	return NULL;
+}
+
+int read_flash(struct flashctx *flash, uint8_t *buf, unsigned int start, unsigned int len)
+{
+	read_func_t *read_func = lookup_read_func_ptr(flash->chip);
+	return read_func(flash, buf, start, len);
+}
+
 /*
  * @cmpbuf	buffer to compare against, cmpbuf[0] is expected to match the
  *		flash content at location start
@@ -500,7 +529,7 @@ int verify_range(struct flashctx *flash, const uint8_t *cmpbuf, unsigned int sta
 		return -1;
 	}
 
-	if (!flash->chip->read) {
+	if (!lookup_read_func_ptr(flash->chip)) {
 		msg_cerr("ERROR: flashrom has no read function for this flash chip.\n");
 		return -1;
 	}
@@ -532,7 +561,7 @@ int verify_range(struct flashctx *flash, const uint8_t *cmpbuf, unsigned int sta
 
 		unsigned int read_len = min(start + len, region.end) - i;
 
-		ret = flash->chip->read(flash, readbuf, i, read_len);
+		ret = read_flash(flash, readbuf, i, read_len);
 		if (ret)
 			goto out_free;
 
@@ -1016,12 +1045,16 @@ static int cros_read_flash(struct flashctx *flash, uint8_t *buf,
 {
 	int ret;
 
-	if (!flash || !flash->chip->read)
+	if (!flash)
+		return -1;
+
+	read_func_t *read_func = lookup_read_func_ptr(flash->chip);
+	if (!read_func)
 		return -1;
 
 	msg_cdbg("%#06x-%#06x:R ", start, start + len - 1);
 
-	ret = flash->chip->read(flash, buf, start, len);
+	ret = read_func(flash, buf, start, len);
 	if (ret) {
 		if (ret == SPI_ACCESS_DENIED) {
 			msg_gdbg("ignoring error when reading 0x%x-0x%x\n",
@@ -1643,7 +1676,7 @@ static int chip_safety_check(const struct flashctx *flash, int force,
 				return 1;
 			msg_cerr("Continuing anyway.\n");
 		}
-		if (!chip->read) {
+		if (!lookup_read_func_ptr(chip)) {
 			msg_cerr("flashrom has no read function for this "
 				 "flash chip.\n");
 			return 1;
