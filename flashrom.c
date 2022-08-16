@@ -822,6 +822,34 @@ static int init_default_layout(struct flashctx *flash)
 	return 0;
 }
 
+/* special unit-test hook */
+write_func_t *g_test_write_injector;
+
+static write_func_t *lookup_write_func_ptr(const struct flashchip *chip)
+{
+	switch (chip->write) {
+		case WRITE_JEDEC: return &write_jedec;
+		case WRITE_JEDEC1: return &write_jedec_1;
+		case WRITE_OPAQUE: return &write_opaque;
+		case SPI_CHIP_WRITE1: return &spi_chip_write_1;
+		case SPI_CHIP_WRITE256: return &spi_chip_write_256;
+		case SPI_WRITE_AAI: return &spi_aai_write;
+		case SPI_WRITE_AT45DB: return &spi_write_at45db;
+		case WRITE_28SF040: return &write_28sf040;
+		case WRITE_82802AB: return &write_82802ab;
+		case WRITE_EN29LV640B: return &write_en29lv640b;
+		case EDI_CHIP_WRITE: return &edi_chip_write;
+		case TEST_WRITE_INJECTOR: return g_test_write_injector;
+	/* default: total function, 0 indicates no write function set.
+	 * We explicitly do not want a default catch-all case in the switch
+	 * to ensure unhandled enum's are compiler warnings.
+	 */
+		case NO_WRITE_FUNC: return NULL;
+	};
+
+	return NULL;
+}
+
 typedef int (probe_func_t)(struct flashctx *flash);
 
 static probe_func_t *lookup_probe_func_ptr(const struct flashchip *chip)
@@ -1022,10 +1050,14 @@ static int read_flash(struct flashctx *flash, uint8_t *buf,
 static int write_flash(struct flashctx *flash, const uint8_t *buf,
 		       unsigned int start, unsigned int len)
 {
-	if (!flash || !flash->chip->write)
+	if (!flash)
 		return -1;
 
-	return flash->chip->write(flash, buf, start, len);
+	write_func_t *write_func = lookup_write_func_ptr(flash->chip);
+	if (!write_func)
+		return -1;
+
+	return write_func(flash, buf, start, len);
 }
 
 /*
@@ -1646,7 +1678,7 @@ static int chip_safety_check(const struct flashctx *flash, int force,
 				return 1;
 			msg_cerr("Continuing anyway.\n");
 		}
-		if (!chip->write) {
+		if (!lookup_write_func_ptr(chip)) {
 			msg_cerr("flashrom has no write function for this "
 				 "flash chip.\n");
 			return 1;
