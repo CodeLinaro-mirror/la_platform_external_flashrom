@@ -157,18 +157,17 @@ static void fix_erasers_if_needed(struct flashchip *chip,
 	 */
 	dry_run = true;
 	for (i = 0; i < NUM_ERASEFUNCTIONS; i++) {
-
+		erasefunc_t *erase_func = lookup_erase_func_ptr(&chip->block_erasers[i]);
 		/* Assume it is not allowed. */
-		if (!chip->block_erasers[i].block_erase)
+		if (!erase_func)
 			continue;
 
-		if (!chip->block_erasers[i].block_erase
-		    (flash, 0, flash->chip->total_size * 1024)) {
+		if (!erase_func(flash, 0, flash->chip->total_size * 1024)) {
 			msg_pdbg("%s: kept eraser at %d\n",  __func__, i);
 			continue;
 		}
 
-		chip->block_erasers[i].block_erase = NULL;
+		chip->block_erasers[i].block_erase = NO_BLOCK_ERASE_FUNC;
 	}
 	dry_run = false;
 }

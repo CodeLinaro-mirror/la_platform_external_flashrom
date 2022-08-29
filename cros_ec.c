@@ -848,7 +848,7 @@ int cros_ec_probe_size(struct flashctx *flash)
 #endif
 		free(info_2_p);
 	}
-	eraser->block_erase = cros_ec_block_erase;
+	eraser->block_erase = CROS_EC_BLOCK_ERASE;
 	/*
 	 * Some STM32 variants erase bits to 0. For now, assume that this
 	 * applies to STM32L parts.
