@@ -28,8 +28,6 @@ const struct programmer_entry programmer_google_host_alias = {
 	.type			= OTHER,
 	.devs.note		= "Google host alias mechanism.\n",
 	.init			= cros_host_alias_init,
-	.map_flash_region	= physmap,
-	.unmap_flash_region	= physunmap,
 
 	/*
 	 * "Internal" implies in-system programming on a live system, so
