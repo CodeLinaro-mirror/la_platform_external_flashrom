@@ -58,8 +58,6 @@ struct programmer_entry {
 
 	int (*init) (const struct programmer_cfg *cfg);
 
-	void (*delay) (unsigned int usecs);
-
 	/*
 	 * If set, use extra precautions such as erasing with small block sizes
 	 * and verifying more rigorously. This will incur a performance penalty
@@ -342,6 +340,7 @@ struct spi_master {
 	int (*shutdown)(void *data);
 	bool (*probe_opcode)(const struct flashctx *flash, uint8_t opcode);
 	void (*get_region)(const struct flashctx *flash, unsigned int addr, struct flash_region *region);
+	void (*delay) (const struct flashctx *flash, unsigned int usecs);
 	void *data;
 };
 
@@ -464,6 +463,7 @@ struct par_master {
 	uint32_t (*chip_readl) (const struct flashctx *flash, const chipaddr addr);
 	void (*chip_readn) (const struct flashctx *flash, uint8_t *buf, const chipaddr addr, size_t len);
 	int (*shutdown)(void *data);
+	void (*delay) (const struct flashctx *flash, unsigned int usecs);
 	void *data;
 };
 int register_par_master(const struct par_master *mst, const enum chipbustype buses, void *data);
