@@ -17,7 +17,7 @@
 
 #if CONFIG_PARADE_LSPCON == 1
 
-/* Same macros as is in parade_lspcon.c programmer. */
+/* Same macros as in parade_lspcon.c programmer. */
 /* FIXME(aklm): should driver register maps be defined in `include/drivers/` for sharing with tests? */
 #define REGISTER_ADDRESS			0x4a
 #define SPISTATUS				0x9e
@@ -60,7 +60,7 @@ static int parade_lspcon_read(void *state, int fd, void *buf, size_t sz)
 	if (io_state->addr != REGISTER_ADDRESS)
 		return sz;
 
-	assert_true(sz <= MAX_REG_BUF_LEN);
+	assert_int_equal(sz, 1);
 
 	switch (io_state->reg_buf[0]) {
 	case SPISTATUS:
@@ -91,10 +91,11 @@ static int parade_lspcon_write(void *state, int fd, const void *buf, size_t sz)
 	if (io_state->addr != REGISTER_ADDRESS)
 		return sz;
 
-	size_t len = min(sz, MAX_REG_BUF_LEN);
-	memcpy(io_state->reg_buf, buf, len);
+	assert_true(sz <= MAX_REG_BUF_LEN);
 
-	return len;
+	memcpy(io_state->reg_buf, buf, sz);
+
+	return sz;
 }
 
 void parade_lspcon_basic_lifecycle_test_success(void **state)
