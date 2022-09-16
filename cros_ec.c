@@ -410,7 +410,7 @@ int cros_ec_prepare(struct flashctx *flash, uint8_t *image, int size)
 		enum flashrom_wp_result ret = flashrom_wp_cfg_new(&cfg);
 
 		if (ret == FLASHROM_WP_OK) {
-			flashrom_wp_set_mode(cfg, FLASHROM_WP_MODE_HARDWARE);
+			flashrom_wp_set_mode(cfg, FLASHROM_WP_MODE_DISABLED);
 
 			ret = flashrom_wp_write_cfg(flash, cfg);
 			flashrom_wp_cfg_release(cfg);
