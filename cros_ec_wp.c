@@ -90,11 +90,6 @@ enum flashrom_wp_result cros_ec_wp_read_cfg(struct flashrom_wp_cfg *cfg, struct 
 
 enum flashrom_wp_result cros_ec_wp_write_cfg(struct flashctx *flash, const struct flashrom_wp_cfg *cfg)
 {
-	/* Read the size of the EC's protection region */
-	struct ec_response_flash_region_info info;
-	if (cros_ec_get_region_info(EC_FLASH_REGION_WP_RO, &info) < 0)
-		return FLASHROM_WP_ERR_OTHER;
-
 	bool enable = cfg->mode == FLASHROM_WP_MODE_HARDWARE;
 
 	struct ec_params_flash_protect p;
