@@ -1161,29 +1161,26 @@ static void set_fd_regions_rwperms(int region, uint32_t base, uint32_t limit, en
 	fd_regions[region].level = level;
 }
 
-static int check_opcode_access(OPCODE *opcode, int type, enum ich_access_protection level)
+static int check_level_access(bool rw, enum ich_access_protection level)
 {
-	const uint8_t op_type = opcode ? opcode->spi_type : type;
-	const int op_type_r = opcode ? SPI_OPCODE_TYPE_READ_WITH_ADDRESS : SPI_OPCODE_TYPE_READ_NO_ADDRESS;
-	const int op_type_w = opcode ? SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS : SPI_OPCODE_TYPE_WRITE_NO_ADDRESS;
-	int ret = 0;
+	if (level == LOCKED)
+		return SPI_ACCESS_DENIED;
 
-	if (op_type == op_type_r) {
-		if (level == READ_PROT || level == LOCKED)
-			return SPI_ACCESS_DENIED;
-	} else if (op_type == op_type_w) {
-		if (level == WRITE_PROT || level == LOCKED)
-			return SPI_ACCESS_DENIED;
-	}
+	if (!rw && level == READ_PROT) /* read [rw:=false] */
+		return SPI_ACCESS_DENIED;
+	if (rw && level == WRITE_PROT) /* write [rw:=true] */
+		return SPI_ACCESS_DENIED;
 
-	return ret;
+	return 0;
 }
 
-static int check_fd_permissions(enum ich_chipset cs, OPCODE *opcode, int type, uint32_t addr, int count)
+static int ich_check_access(const struct flashctx *flash, unsigned int start, unsigned int len, bool rw)
 {
 	struct ich_descriptors desc = { 0 };
-	const ssize_t nr = MIN(ich_number_of_regions(cs, &desc.content), (ssize_t)ARRAY_SIZE(fd_regions));
+	const ssize_t nr = MIN(ich_number_of_regions(ich_generation, &desc.content), (ssize_t)ARRAY_SIZE(fd_regions));
 	bool covered_by_descriptor = false;
+
+	msg_pdbg("\n%s: start=%d, len=%d, rw=%d\n", __func__, start, len, rw);
 
 	/* check flash descriptor permissions (if present) */
 	for (ssize_t i = 0; i < nr; i++) {
@@ -1191,7 +1188,7 @@ static int check_fd_permissions(enum ich_chipset cs, OPCODE *opcode, int type, u
 		uint32_t base = fd_regions[i].base;
 		uint32_t limit = fd_regions[i].limit;
 
-		if ((addr + count - 1 < base) || (addr > limit))
+		if ((start + len - 1 < base) || (start > limit))
 			continue;
 
 		// FIXME: This does not ensure that the range to be checked is
@@ -1199,26 +1196,21 @@ static int check_fd_permissions(enum ich_chipset cs, OPCODE *opcode, int type, u
 		// overlaps a descriptor.
 		covered_by_descriptor = true;
 
-		int ret = check_opcode_access(opcode, type, fd_regions[i].level);
+		int ret = check_level_access(rw, fd_regions[i].level);
 		if (ret) {
 			msg_pspew("%s: Cannot issue read/write address 0x%08x in "
-			          "region %s\n", __func__, addr, name);
+			          "region %s\n", __func__, start, name);
 			return ret;
 		}
 	}
 
-	if (!covered_by_descriptor && !opcode) { // FIXME(b/171892105).
+	if (!covered_by_descriptor) { // FIXME(b/171892105).
 		msg_pspew("%s: Address not covered by any descriptor 0x%06x\n",
-			  __func__, addr);
+			  __func__, start);
 		return SPI_ACCESS_DENIED;
 	}
 
 	return 0;
-}
-
-static int ich_hwseq_check_access(const struct flashctx *flash, unsigned int start, unsigned int len, int read)
-{
-	return check_fd_permissions(ich_generation, NULL, read ? SPI_OPCODE_TYPE_READ_NO_ADDRESS: SPI_OPCODE_TYPE_WRITE_NO_ADDRESS, start, len);
 }
 
 static int ich_spi_send_command(const struct flashctx *flash, unsigned int writecnt,
@@ -1327,7 +1319,8 @@ static int ich_spi_send_command(const struct flashctx *flash, unsigned int write
 		}
 		addr += addr_offset;
 
-		result = check_fd_permissions(ich_generation, opcode, 0, addr, count);
+		bool rw = opcode->spi_type == SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS;
+		result = ich_check_access(flash, addr, count, rw);
 		if (result)
 			return result;
 	}
@@ -1681,7 +1674,7 @@ static int ich_hwseq_block_erase(struct flashctx *flash, unsigned int addr,
 	}
 
 	/* Check flash region permissions before erasing */
-	int result = check_fd_permissions(ich_generation, NULL, SPI_OPCODE_TYPE_WRITE_NO_ADDRESS, addr, len);
+	int result = ich_check_access(flash, addr, len, true);
 	if (result)
 		return result;
 
@@ -1733,7 +1726,7 @@ static int ich_hwseq_read(struct flashctx *flash, uint8_t *buf,
 		block_len = min(block_len, 256 - (addr & 0xFF));
 
 		/* Check flash region permissions before reading */
-		chunk_status = check_fd_permissions(ich_generation, NULL, SPI_OPCODE_TYPE_READ_NO_ADDRESS, addr, block_len);
+		chunk_status = ich_check_access(flash, addr, block_len, false);
 		if (chunk_status) {
 			if (chunk_status == SPI_ACCESS_DENIED) {
 				/* fill this chunk with 0xff bytes and
@@ -1793,7 +1786,7 @@ static int ich_hwseq_write(struct flashctx *flash, const uint8_t *buf, unsigned 
 		/* as well as flash chip page borders as demanded in the Intel datasheets. */
 		block_len = min(block_len, 256 - (addr & 0xFF));
 		/* Check flash region permissions before writing */
-		int result = check_fd_permissions(ich_generation, NULL, SPI_OPCODE_TYPE_WRITE_NO_ADDRESS, addr, block_len);
+		int result = ich_check_access(flash, addr, block_len, true);
 		if (result)
 			return result;
 		ich_fill_data(buf, block_len, ICH9_REG_FDATA0);
@@ -2065,7 +2058,7 @@ static const struct spi_master spi_master_ich9 = {
 	.probe_opcode	= ich_spi_probe_opcode,
 };
 
-static const struct opaque_master opaque_master_ich_hwseq = {
+static struct opaque_master opaque_master_ich_hwseq = {
 	.max_data_read	= 64,
 	.max_data_write	= 64,
 	.probe		= ich_hwseq_probe,
@@ -2074,7 +2067,7 @@ static const struct opaque_master opaque_master_ich_hwseq = {
 	.erase		= ich_hwseq_block_erase,
 	.read_register	= ich_hwseq_read_status,
 	.write_register	= ich_hwseq_write_status,
-	.check_access	= ich_hwseq_check_access,
+	.check_access	= ich_check_access,
 };
 
 static int init_ich7_spi(void *spibar, enum ich_chipset ich_gen)
