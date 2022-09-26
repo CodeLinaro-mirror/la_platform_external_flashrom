@@ -427,40 +427,6 @@ static int check_erased_range(struct flashctx *flash, unsigned int start, unsign
 	return ret;
 }
 
-static int read_checked_access(struct flashctx *flash,
-			uint8_t *readbuf, const uint8_t *cmpbuf,
-			unsigned int start, unsigned int len)
-{
-	int ret = 0;
-
-	for (size_t i = start; i < start + len;) {
-		struct flash_region region;
-		get_flash_region(flash, i, &region);
-		/*
-		 * Verify only regions we could have both
-		 * written to and we can read back.
-		 */
-		if (region.write_prot || region.read_prot) {
-			i = region.end;
-			continue;
-		}
-
-		unsigned int read_len = min(start + len, region.end) - i;
-
-		ret = flash->chip->read(flash, readbuf, i, read_len);
-		if (ret)
-			return ret;
-
-		ret = compare_range(cmpbuf + (i - start), readbuf, i, read_len);
-		if (ret)
-			return ret;
-
-		i += read_len;
-	}
-
-	return ret;
-}
-
 /*
  * @cmpbuf	buffer to compare against, cmpbuf[0] is expected to match the
  *		flash content at location start
@@ -493,20 +459,31 @@ int verify_range(struct flashctx *flash, const uint8_t *cmpbuf, unsigned int sta
 
 	int ret = 0;
 
-	msg_gdbg("%#06x..%#06x ", start, start + len -1);
-	if (programmer->paranoid) {
-		ret = read_checked_access(flash, readbuf, cmpbuf, start, len);
-	} else {
-		int tmp;
+	msg_gdbg("%#06x..%#06x ", start, start + len - 1);
 
-		/* read as much as we can to reduce transaction overhead */
-		tmp = flash->chip->read(flash, readbuf, start, len);
-		if (tmp && (tmp != SPI_ACCESS_DENIED)) {
-			ret = tmp;
-			goto out_free;
+	for (size_t i = start; i < start + len;) {
+		struct flash_region region;
+		get_flash_region(flash, i, &region);
+		/*
+		 * Verify only regions we could have both
+		 * written to and we can read back.
+		 */
+		if (region.write_prot || region.read_prot) {
+			i = region.end;
+			continue;
 		}
 
-		ret = compare_range(cmpbuf, readbuf, start, len);
+		unsigned int read_len = min(start + len, region.end) - i;
+
+		ret = flash->chip->read(flash, readbuf, i, read_len);
+		if (ret)
+			goto out_free;
+
+		ret = compare_range(cmpbuf + (i - start), readbuf, i, read_len);
+		if (ret)
+			goto out_free;
+
+		i += read_len;
 	}
 
 out_free:
