@@ -414,6 +414,13 @@ int sb600_probe_spi(const struct programmer_cfg *cfg, struct pci_dev *dev);
 int wbsio_check_for_spi(void);
 #endif
 
+struct flash_region {
+	unsigned int start;
+	unsigned int end;
+	bool read_prot;
+	bool write_prot;
+};
+
 /* opaque.c */
 struct opaque_master {
 	int max_data_read;
@@ -434,12 +441,7 @@ struct opaque_master {
 	enum flashrom_wp_result (*wp_write_cfg)(struct flashctx *, const struct flashrom_wp_cfg *);
 	enum flashrom_wp_result (*wp_read_cfg)(struct flashrom_wp_cfg *, struct flashctx *);
 	enum flashrom_wp_result (*wp_get_ranges)(struct flashrom_wp_ranges **, struct flashctx *);
-	/*
-	 * Check flash access for addresses in the range [start, start+len-1].
-	 * If rw=0, checks if entire range is writable.
-	 * If rw=1, checks if entire range is readable.
-	 */
-	int (*check_access) (const struct flashctx *flash, unsigned int start, unsigned int len, bool rw);
+	void (*get_region)(const struct flashctx *flash, unsigned int addr, struct flash_region *region);
 	int (*shutdown)(void *data);
 	void *data;
 };

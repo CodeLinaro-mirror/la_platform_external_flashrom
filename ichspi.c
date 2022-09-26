@@ -1161,53 +1161,68 @@ static void set_fd_regions_rwperms(int region, uint32_t base, uint32_t limit, en
 	fd_regions[region].level = level;
 }
 
-static int check_level_access(bool rw, enum ich_access_protection level)
-{
-	if (level == LOCKED)
-		return SPI_ACCESS_DENIED;
-
-	if (!rw && level == READ_PROT) /* read [rw:=false] */
-		return SPI_ACCESS_DENIED;
-	if (rw && level == WRITE_PROT) /* write [rw:=true] */
-		return SPI_ACCESS_DENIED;
-
-	return 0;
-}
-
-static int ich_check_access(const struct flashctx *flash, unsigned int start, unsigned int len, bool rw)
+static void ich_get_region(const struct flashctx *flash, unsigned int addr, struct flash_region *region)
 {
 	struct ich_descriptors desc = { 0 };
 	const ssize_t nr = MIN(ich_number_of_regions(ich_generation, &desc.content), (ssize_t)ARRAY_SIZE(fd_regions));
-	bool covered_by_descriptor = false;
 
-	msg_pdbg("\n%s: start=%d, len=%d, rw=%d\n", __func__, start, len, rw);
+	/*
+	 * Set default values for *region. If no flash descriptor containing
+	 * addr is found, these values will be used instead.
+	 *
+	 * The region start and end are constrained so that they do not overlap
+	 * any flash descriptor regions.
+	 */
+	region->read_prot  = false;
+	region->write_prot = false;
+	region->start = 0;
+	region->end = flashrom_flash_getsize(flash);
 
-	/* check flash descriptor permissions (if present) */
 	for (ssize_t i = 0; i < nr; i++) {
-		const char *name = fd_regions[i].name;
 		uint32_t base = fd_regions[i].base;
 		uint32_t limit = fd_regions[i].limit;
+		enum ich_access_protection level = fd_regions[i].level;
 
-		if ((start + len - 1 < base) || (start > limit))
-			continue;
+		if (addr < base) {
+			/*
+			 * fd_regions[i] starts after addr, constrain
+			 * region->end so that it does not overlap.
+			 */
+			region->end = min(region->end, base);
+		} else if (addr > limit) {
+			/*
+			 * fd_regions[i] ends before addr, constrain
+			 * region->start so that it does not overlap.
+			 */
+			region->start = max(region->start, limit + 1);
+		} else {
+			/* fd_regions[i] contains addr, copy to *region. */
+			region->start = base;
+			region->end = limit + 1;
+			region->read_prot  = (level == LOCKED) || (level == READ_PROT);
+			region->write_prot = (level == LOCKED) || (level == WRITE_PROT);
 
-		// FIXME: This does not ensure that the range to be checked is
-		// fully covered by the descriptor, only that it partially
-		// overlaps a descriptor.
-		covered_by_descriptor = true;
-
-		int ret = check_level_access(rw, fd_regions[i].level);
-		if (ret) {
-			msg_pspew("%s: Cannot issue read/write address 0x%08x in "
-			          "region %s\n", __func__, start, name);
-			return ret;
+			return;
 		}
 	}
+}
 
-	if (!covered_by_descriptor) { // FIXME(b/171892105).
-		msg_pspew("%s: Address not covered by any descriptor 0x%06x\n",
-			  __func__, start);
-		return SPI_ACCESS_DENIED;
+/*
+ * Check flash access for addresses in the range [start, start+len-1].
+ * If rw=0, checks if entire range is writable.
+ * If rw=1, checks if entire range is readable.
+ */
+static int ich_check_access(const struct flashctx *flash, unsigned int start, unsigned int len, bool rw)
+{
+	unsigned int i = start;
+	while (i < start + len) {
+		struct flash_region region;
+		ich_get_region(flash, i, &region);
+
+		if ((rw && region.write_prot) || (!rw && region.read_prot))
+			return SPI_ACCESS_DENIED;
+
+		i = region.end;
 	}
 
 	return 0;
@@ -2067,7 +2082,7 @@ static struct opaque_master opaque_master_ich_hwseq = {
 	.erase		= ich_hwseq_block_erase,
 	.read_register	= ich_hwseq_read_status,
 	.write_register	= ich_hwseq_write_status,
-	.check_access	= ich_check_access,
+	.get_region	= ich_get_region,
 };
 
 static int init_ich7_spi(void *spibar, enum ich_chipset ich_gen)

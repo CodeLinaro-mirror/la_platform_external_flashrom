@@ -341,6 +341,18 @@ char *extract_programmer_param_str(const struct programmer_cfg *cfg, const char 
 	return extract_param(&cfg->params, param_name, ",");
 }
 
+static void get_flash_region(const struct flashctx *flash, int addr, struct flash_region *region)
+{
+	if ((flash->mst->buses_supported & BUS_PROG) && flash->mst->opaque.get_region) {
+		flash->mst->opaque.get_region(flash, addr, region);
+	} else {
+		region->start = 0;
+		region->end = flashrom_flash_getsize(flash);
+		region->read_prot = false;
+		region->write_prot = false;
+	}
+}
+
 static int check_block_eraser(const struct flashctx *flash, int k, int log)
 {
 	struct block_eraser eraser = flash->chip->block_erasers[k];
@@ -419,54 +431,31 @@ static int read_checked_access(struct flashctx *flash,
 			uint8_t *readbuf, const uint8_t *cmpbuf,
 			unsigned int start, unsigned int len)
 {
-	unsigned int i, chunksize;
 	int ret = 0;
 
-	/* limit chunksize in order to catch errors early */
-	for (i = 0, chunksize = 0; i < len; i += chunksize) {
-		int tmp;
-		int chk_acc = 0;
-
+	for (size_t i = start; i < start + len;) {
+		struct flash_region region;
+		get_flash_region(flash, i, &region);
 		/*
-		 * Let's work in chunks of at least 4096 bytes at a
-		 * time to balance reacting fast but still avoiding the
-		 * overhead of working at a smaller size if page_size is
-		 * something like 256 bytes.
+		 * Verify only regions we could have both
+		 * written to and we can read back.
 		 */
-		chunksize = max(flash->chip->page_size, 4096);
-		chunksize = min(chunksize, len - i);
-
-		/*
-		 * If we don't have access to some part of this chunk
-		 * then bring the size back down to page_size.
-		 */
-		if ((flash->mst->buses_supported & BUS_PROG) && flash->mst->opaque.check_access) {
-			chk_acc = flash->mst->opaque.check_access(flash, start + i, chunksize, true);
-			if (chk_acc) {
-				chunksize = min(chunksize, flash->chip->page_size);
-				chk_acc = flash->mst->opaque.check_access(flash, start + i, chunksize, true);
-			}
-		}
-
-		tmp = flash->chip->read(flash, readbuf + i, start + i, chunksize);
-		if (tmp) {
-			ret = tmp;
-			if (tmp == SPI_ACCESS_DENIED)
-				continue;
-			else
-				break;
-		}
-
-		/*
-		 * Check write access permission and do not compare chunks
-		 * where flashrom does not have write access to the region.
-		 */
-		if (chk_acc == SPI_ACCESS_DENIED)
+		if (region.write_prot || region.read_prot) {
+			i = region.end;
 			continue;
+		}
 
-		ret = compare_range(cmpbuf + i, readbuf + i, start + i, chunksize);
-		if (ret < 0)
-			break;
+		unsigned int read_len = min(start + len, region.end) - i;
+
+		ret = flash->chip->read(flash, readbuf, i, read_len);
+		if (ret)
+			return ret;
+
+		ret = compare_range(cmpbuf + (i - start), readbuf, i, read_len);
+		if (ret)
+			return ret;
+
+		i += read_len;
 	}
 
 	return ret;
