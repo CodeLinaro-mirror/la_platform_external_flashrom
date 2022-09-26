@@ -346,6 +346,7 @@ static void get_flash_region(const struct flashctx *flash, int addr, struct flas
 	if ((flash->mst->buses_supported & BUS_PROG) && flash->mst->opaque.get_region) {
 		flash->mst->opaque.get_region(flash, addr, region);
 	} else {
+		region->name = "";
 		region->start = 0;
 		region->end = flashrom_flash_getsize(flash);
 		region->read_prot = false;
@@ -469,9 +470,12 @@ int verify_range(struct flashctx *flash, const uint8_t *cmpbuf, unsigned int sta
 		 * written to and we can read back.
 		 */
 		if (region.write_prot || region.read_prot) {
+			msg_gdbg("%s: skipping %s region (%#08x..%#08x)\n", __func__, region.name, region.start, region.end - 1);
+
 			i = region.end;
 			continue;
 		}
+		msg_gdbg("%s: verifying %s region (%#08x..%#08x)\n", __func__, region.name, region.start, region.end - 1);
 
 		unsigned int read_len = min(start + len, region.end) - i;
 

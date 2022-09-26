@@ -1173,6 +1173,7 @@ static void ich_get_region(const struct flashctx *flash, unsigned int addr, stru
 	 * The region start and end are constrained so that they do not overlap
 	 * any flash descriptor regions.
 	 */
+	region->name = "";
 	region->read_prot  = false;
 	region->write_prot = false;
 	region->start = 0;
@@ -1197,6 +1198,7 @@ static void ich_get_region(const struct flashctx *flash, unsigned int addr, stru
 			region->start = max(region->start, limit + 1);
 		} else {
 			/* fd_regions[i] contains addr, copy to *region. */
+			region->name = fd_regions[i].name;
 			region->start = base;
 			region->end = limit + 1;
 			region->read_prot  = (level == LOCKED) || (level == READ_PROT);

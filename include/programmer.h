@@ -417,6 +417,7 @@ int wbsio_check_for_spi(void);
 #endif
 
 struct flash_region {
+	const char *name;
 	unsigned int start;
 	unsigned int end;
 	bool read_prot;
