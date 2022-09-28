@@ -31,13 +31,14 @@
 #include <sys/utsname.h>
 #endif
 
-#include "action_descriptor.h"
 #include "flash.h"
 #include "flashchips.h"
 #include "programmer.h"
-#include "spi.h"
 #include "hwaccess_physmap.h"
 #include "chipdrivers.h"
+
+#include "action_descriptor.h"
+#include "spi.h"
 #include "power.h"
 
 const char flashrom_version[] = FLASHROM_VERSION;
