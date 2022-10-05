@@ -821,7 +821,7 @@ int cros_ec_probe_size(struct flashctx *flash)
 			info_2_p = malloc(size_info_v2);
 			if (!info_2_p) {
 				msg_perr("%s(): malloc of %d banks failed\n",
-					 __func__, info_2_p->num_banks_total);
+					 __func__, params_2.num_banks_desc);
 				return 0;
 			}
 		}
