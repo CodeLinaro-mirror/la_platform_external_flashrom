@@ -206,6 +206,7 @@ programmer = {
     'deps'    : [ libusb1 ],
     'groups'  : [ group_usb, group_external ],
     'srcs'    : files('dediprog.c', 'usbdev.c'),
+    'test_srcs' : files('tests/dediprog.c'),
     'flags'   : [ '-DCONFIG_DEDIPROG=1' ],
   },
   'developerbox_spi' : {
@@ -235,6 +236,7 @@ programmer = {
   },
   'dummy'     : {
     'srcs'    : files('dummyflasher.c'),
+    'test_srcs' : files('tests/dummyflasher.c'),
     'flags'   : [ '-DCONFIG_DUMMY=1' ],
   },
   'ft2232_spi' : {
@@ -303,6 +305,7 @@ programmer = {
     'deps'    : [ linux_headers ],
     'groups'  : [ group_internal ],
     'srcs'    : files('linux_mtd.c'),
+    'test_srcs' : files('tests/linux_mtd.c'),
     'flags'   : [ '-DCONFIG_LINUX_MTD=1' ],
   },
   'linux_spi' : {
@@ -310,6 +313,7 @@ programmer = {
     'deps'    : [ linux_headers ],
               # internal / external?
     'srcs'    : files('linux_spi.c'),
+    'test_srcs' : files('tests/linux_spi.c'),
     'flags'   : [ '-DCONFIG_LINUX_SPI=1' ],
   },
   'parade_lspcon' : {
@@ -317,6 +321,7 @@ programmer = {
     'deps'    : [ linux_headers ],
     'groups'  : [ group_i2c ],
     'srcs'    : files('parade_lspcon.c', 'i2c_helper_linux.c'),
+    'test_srcs' : files('tests/parade_lspcon.c'),
     'flags'   : [ '-DCONFIG_PARADE_LSPCON=1' ],
     'default' : false
   },
@@ -325,6 +330,7 @@ programmer = {
     'deps'    : [ linux_headers ],
     'groups'  : [ group_i2c ],
     'srcs'    : files('mediatek_i2c_spi.c', 'i2c_helper_linux.c'),
+    'test_srcs' : files('tests/mediatek_i2c_spi.c'),
     'flags'   : [ '-DCONFIG_MEDIATEK_I2C_SPI=1' ],
     'default' : false,
   },
@@ -380,6 +386,7 @@ programmer = {
     'deps'    : [ libpci ],
     'groups'  : [ group_pci, group_internal ],
     'srcs'    : files('nicrealtek.c', 'pcidev.c'),
+    'test_srcs' : files('tests/nicrealtek.c'),
     'flags'   : [ '-DCONFIG_NICREALTEK=1' ],
   },
   'ogp_spi' : {
@@ -405,6 +412,7 @@ programmer = {
     'deps'    : [ libusb1 ],
     'groups'  : [ group_usb, group_external ],
     'srcs'    : files('raiden_debug_spi.c', 'usb_device.c'),
+    'test_srcs' : files('tests/raiden_debug_spi.c'),
     'flags'   : [ '-DCONFIG_RAIDEN_DEBUG_SPI=1' ],
   },
   'rayer_spi' : {
@@ -419,6 +427,7 @@ programmer = {
     'deps'    : [ linux_headers ],
     'groups'  : [ group_i2c ],
     'srcs'    : files('realtek_mst_i2c_spi.c', 'i2c_helper_linux.c'),
+    'test_srcs' : files('tests/realtek_mst_i2c_spi.c'),
     'flags'   : [ '-DCONFIG_REALTEK_MST_I2C_SPI=1' ],
     'default' : false,
   },
@@ -465,6 +474,7 @@ foreach p_name, p_data : programmer
     'deps' : p_data.get('deps', []),
     'groups' : p_data.get('groups', []),
     'srcs' : p_data.get('srcs', []),
+    'test_srcs': p_data.get('test_srcs', []),
     'flags' : p_data.get('flags', []),
     'default' : p_data.get('default', true),
   }
