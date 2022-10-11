@@ -110,6 +110,8 @@ extern const struct programmer_entry programmer_satasii;
 extern const struct programmer_entry programmer_serprog;
 extern const struct programmer_entry programmer_stlinkv3_spi;
 extern const struct programmer_entry programmer_usbblaster_spi;
+extern const struct programmer_entry programmer_dirtyjtag_spi;
+
 extern const struct programmer_entry programmer_cros_ec;
 extern const struct programmer_entry programmer_google_host_alias;
 
