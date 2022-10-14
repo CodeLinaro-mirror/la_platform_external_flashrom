@@ -1680,11 +1680,6 @@ static int ich_hwseq_block_erase(struct flashctx *flash, unsigned int addr,
 		return -1;
 	}
 
-	/* Check flash region permissions before erasing */
-	int result = check_access(flash, addr, len, true);
-	if (result)
-		return result;
-
 	msg_pdbg("Erasing %d bytes starting at 0x%06x.\n", len, addr);
 
 	if (ich_exec_sync_hwseq_xfer(HSFC_CYCLE_BLOCK_ERASE, addr, 0, ich_generation,

@@ -1342,12 +1342,15 @@ static int erase_and_write_block_helper(struct flashctx *const flash,
 	if (need_erase(info->curcontents, info->newcontents, erase_len, gran, 0xff)) {
 		all_skipped = false;
 		msg_cdbg(" E");
+
+		if (check_access(flash, info->erase_start, erase_len, 0)) {
+			msg_cdbg(" DENIED");
+			return SPI_ACCESS_DENIED;
+		}
+
 		ret = erasefn(flash, info->erase_start, erase_len);
 		if (ret) {
-			if (ret == SPI_ACCESS_DENIED)
-				msg_cdbg(" DENIED");
-			else
-				msg_cerr(" ERASE_FAILED\n");
+			msg_cerr(" ERASE_FAILED\n");
 			return ret;
 		}
 
@@ -1370,6 +1373,12 @@ static int erase_and_write_block_helper(struct flashctx *const flash,
 		all_skipped = false;
 		if (!writecount++)
 			msg_cdbg(" W");
+
+		if (check_access(flash, info->erase_start + starthere, lenhere, 0)) {
+			msg_cdbg(" DENIED");
+			return SPI_ACCESS_DENIED;
+		}
+
 		/* Needs the partial write function signature. */
 		ret = write_flash(flash, (uint8_t *)info->newcontents + starthere,
 				   info->erase_start + starthere, lenhere);
