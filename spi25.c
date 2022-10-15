@@ -691,23 +691,18 @@ int spi_nbyte_read(struct flashctx *flash, unsigned int address, uint8_t *bytes,
 int spi_read_chunked(struct flashctx *flash, uint8_t *buf, unsigned int start,
 		     unsigned int len, unsigned int chunksize)
 {
-	int ret, rc = 0;
+	int ret;
 	size_t to_read;
 	size_t start_address = start;
 	size_t end_address = len - start;
 	for (; len; len -= to_read, buf += to_read, start += to_read) {
 		to_read = min(chunksize, len);
 		ret = spi_nbyte_read(flash, start, buf, to_read);
-		if (ret == SPI_ACCESS_DENIED) {
-			/* fill this chunk with 0xff bytes and
-			   let caller know about the error */
-			memset(buf, 0xff, to_read);
-			rc = ret;
-		} else if (ret)
+		if (ret)
 			return ret;
 		update_progress(flash, FLASHROM_PROGRESS_READ, start - start_address + to_read, end_address);
 	}
-	return rc;
+	return 0;
 }
 
 /*

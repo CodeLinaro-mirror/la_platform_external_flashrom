@@ -1314,11 +1314,6 @@ static int ich_spi_send_command(const struct flashctx *flash, unsigned int write
 			return SPI_INVALID_ADDRESS;
 		}
 		addr += addr_offset;
-
-		bool rw = opcode->spi_type == SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS;
-		result = check_access(flash, addr, count, rw);
-		if (result)
-			return result;
 	}
 
 	result = run_opcode(flash, *opcode, addr, count, data);
