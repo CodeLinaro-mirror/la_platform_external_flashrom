@@ -1346,13 +1346,13 @@ static int ich_spi_send_command(const struct flashctx *flash, unsigned int write
 	return result;
 }
 
-static struct hwseq_data {
+struct hwseq_data {
 	uint32_t size_comp0;
 	uint32_t size_comp1;
 	uint32_t addr_mask;
 	bool only_4k;
 	uint32_t hsfc_fcycle;
-} g_hwseq_data;
+};
 
 static struct hwseq_data *get_hwseq_data_from_context(const struct flashctx *flash)
 {
@@ -1775,6 +1775,12 @@ static int ich_hwseq_write(struct flashctx *flash, const uint8_t *buf, unsigned 
 	return 0;
 }
 
+static int ich_hwseq_shutdown(void *data)
+{
+	free(data);
+	return 0;
+}
+
 static int ich_spi_send_multicommand(const struct flashctx *flash,
 				     struct spi_command *cmds)
 {
@@ -2030,6 +2036,7 @@ static struct opaque_master opaque_master_ich_hwseq = {
 	.read_register	= ich_hwseq_read_status,
 	.write_register	= ich_hwseq_write_status,
 	.get_region	= ich_get_region,
+	.shutdown	= ich_hwseq_shutdown,
 };
 
 static int init_ich7_spi(void *spibar, enum ich_chipset ich_gen)
@@ -2173,7 +2180,8 @@ static int init_ich_default(const struct programmer_cfg *cfg, void *spibar, enum
 	enum ich_spi_mode ich_spi_mode = ich_auto;
 	size_t num_freg, num_pr, reg_pr0;
 
-	init_chipset_properties(&swseq_data, &g_hwseq_data, &num_freg, &num_pr, &reg_pr0, ich_gen);
+	struct hwseq_data hwseq_data;
+	init_chipset_properties(&swseq_data, &hwseq_data, &num_freg, &num_pr, &reg_pr0, ich_gen);
 
 	int ret = get_ich_spi_mode_param(cfg, &ich_spi_mode);
 	if (ret)
@@ -2393,16 +2401,20 @@ static int init_ich_default(const struct programmer_cfg *cfg, void *spibar, enum
 			msg_perr("Could not determine density of flash component %d.\n", 0);
 			return ERROR_FATAL;
 		}
-		g_hwseq_data.size_comp0 = tmpi;
+		hwseq_data.size_comp0 = tmpi;
 
 		tmpi = getFCBA_component_density(ich_gen, &desc, 1);
 		if (tmpi < 0) {
 			msg_perr("Could not determine density of flash component %d.\n", 1);
 			return ERROR_FATAL;
 		}
-		g_hwseq_data.size_comp1 = tmpi;
+		hwseq_data.size_comp1 = tmpi;
 
-		register_opaque_master(&opaque_master_ich_hwseq, &g_hwseq_data);
+		struct hwseq_data *opaque_hwseq_data = calloc(1, sizeof(struct hwseq_data));
+		if (!opaque_hwseq_data)
+			return ERROR_FATAL;
+		memcpy(opaque_hwseq_data, &hwseq_data, sizeof(*opaque_hwseq_data));
+		register_opaque_master(&opaque_master_ich_hwseq, opaque_hwseq_data);
 	} else {
 		register_spi_master(&spi_master_ich9, NULL);
 	}
