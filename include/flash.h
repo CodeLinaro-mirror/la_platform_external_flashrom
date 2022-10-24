@@ -504,7 +504,7 @@ int check_access(const struct flashctx *flash, unsigned int start, unsigned int 
 #define ERROR_NONFATAL 0x100
 
 /* Something happened that shouldn't happen, we'll abort. */
-#define ERROR_FATAL -0xee
+#define ERROR_FLASHROM_FATAL -0xee
 #define ERROR_FLASHROM_BUG -200
 /* We reached one of the hardcoded limits of flashrom. This can be fixed by
  * increasing the limit of a compile-time allocation or by switching to dynamic
