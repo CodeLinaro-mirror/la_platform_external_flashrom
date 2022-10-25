@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 
-skips="cros"
+skips="cros
+manibuilder"
 
-comm -1 <(git ls-tree --name-only cros/master | sort) \
-  <(git ls-tree --name-only cros/upstream_validation | sort) \
+comm -1 <(git ls-tree -r --name-only cros/master | sort) \
+  <(git ls-tree -r --name-only cros/upstream_validation | sort) \
   | grep -vf <(echo "${skips}") \
   | xargs git diff cros/master cros/upstream_validation --stat -- \
   | cat
