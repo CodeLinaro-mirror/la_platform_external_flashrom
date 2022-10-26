@@ -1209,27 +1209,6 @@ static void ich_get_region(const struct flashctx *flash, unsigned int addr, stru
 	}
 }
 
-/*
- * Check flash access for addresses in the range [start, start+len-1].
- * If rw=0, checks if entire range is writable.
- * If rw=1, checks if entire range is readable.
- */
-static int ich_check_access(const struct flashctx *flash, unsigned int start, unsigned int len, bool rw)
-{
-	unsigned int i = start;
-	while (i < start + len) {
-		struct flash_region region;
-		ich_get_region(flash, i, &region);
-
-		if ((rw && region.write_prot) || (!rw && region.read_prot))
-			return SPI_ACCESS_DENIED;
-
-		i = region.end;
-	}
-
-	return 0;
-}
-
 static int ich_spi_send_command(const struct flashctx *flash, unsigned int writecnt,
 				unsigned int readcnt,
 				const unsigned char *writearr,
@@ -1337,7 +1316,7 @@ static int ich_spi_send_command(const struct flashctx *flash, unsigned int write
 		addr += addr_offset;
 
 		bool rw = opcode->spi_type == SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS;
-		result = ich_check_access(flash, addr, count, rw);
+		result = check_access(flash, addr, count, rw);
 		if (result)
 			return result;
 	}
@@ -1701,7 +1680,7 @@ static int ich_hwseq_block_erase(struct flashctx *flash, unsigned int addr,
 	}
 
 	/* Check flash region permissions before erasing */
-	int result = ich_check_access(flash, addr, len, true);
+	int result = check_access(flash, addr, len, true);
 	if (result)
 		return result;
 
@@ -1754,7 +1733,7 @@ static int ich_hwseq_read(struct flashctx *flash, uint8_t *buf,
 		block_len = min(block_len, 256 - (addr & 0xFF));
 
 		/* Check flash region permissions before reading */
-		chunk_status = ich_check_access(flash, addr, block_len, false);
+		chunk_status = check_access(flash, addr, block_len, false);
 		if (chunk_status) {
 			if (chunk_status == SPI_ACCESS_DENIED) {
 				/* fill this chunk with 0xff bytes and
@@ -1816,7 +1795,7 @@ static int ich_hwseq_write(struct flashctx *flash, const uint8_t *buf, unsigned 
 		/* as well as flash chip page borders as demanded in the Intel datasheets. */
 		block_len = min(block_len, 256 - (addr & 0xFF));
 		/* Check flash region permissions before writing */
-		int result = ich_check_access(flash, addr, block_len, true);
+		int result = check_access(flash, addr, block_len, true);
 		if (result)
 			return result;
 		ich_fill_data(buf, block_len, ICH9_REG_FDATA0);
