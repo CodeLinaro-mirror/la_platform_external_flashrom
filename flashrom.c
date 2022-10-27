@@ -1418,13 +1418,9 @@ static int walk_eraseregions(struct flashctx *flash,
 			};
 			erasefunc_t *erase_func = lookup_erase_func_ptr(eraser);
 			rc = per_blockfn(flash, &info, erase_func);
+			if (rc)
+				return rc;
 
-			if (rc) {
-				if (rc == SPI_ACCESS_DENIED)
-					rc = 0;
-				else
-					return rc;
-			}
 			base += pu->block_size;
 		}
 	}
@@ -1432,6 +1428,13 @@ static int walk_eraseregions(struct flashctx *flash,
 	return rc;
 }
 
+/*
+ * Helper function called on each block to be erased and written.
+ *
+ * Returns 0 if erase and write operations succeed or if they are skipped
+ *         because the block is in a non-writable region.
+ * Returns non-0 error code if erase or write operations fail unexpectedly.
+ */
 static int erase_and_write_block_helper(struct flashctx *const flash,
 					const struct walk_info *const info,
 					const erasefn_t erasefn)
@@ -1449,7 +1452,7 @@ static int erase_and_write_block_helper(struct flashctx *const flash,
 
 		if (check_access(flash, info->erase_start, erase_len, 1)) {
 			msg_cdbg(" DENIED");
-			return SPI_ACCESS_DENIED;
+			return 0;
 		}
 
 		ret = erasefn(flash, info->erase_start, erase_len);
@@ -1480,7 +1483,7 @@ static int erase_and_write_block_helper(struct flashctx *const flash,
 
 		if (check_access(flash, info->erase_start + starthere, lenhere, 1)) {
 			msg_cdbg(" DENIED");
-			return SPI_ACCESS_DENIED;
+			return 0;
 		}
 
 		/* Needs the partial write function signature. */
