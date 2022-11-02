@@ -1503,7 +1503,11 @@ static int ich_hwseq_read_status(const struct flashctx *flash, enum flash_reg re
 
 	if (reg != STATUS1) {
 		msg_pdbg("%s: only supports STATUS1\n", __func__);
-		return WRITEPROTECT_INVALID_REGISTER;
+		/*
+		 * Return SPI_INVALID_OPCODE to be consistent with spi_read_register()
+		 * and make error handling simpler even though this isn't a SPI master.
+		 */
+		return SPI_INVALID_OPCODE;
 	}
 	msg_pdbg("Reading Status register\n");
 
@@ -1524,7 +1528,11 @@ static int ich_hwseq_write_status(const struct flashctx *flash, enum flash_reg r
 
 	if (reg != STATUS1) {
 		msg_pdbg("%s: only supports STATUS1\n", __func__);
-		return WRITEPROTECT_INVALID_REGISTER;
+		/*
+		 * Return SPI_INVALID_OPCODE to be consistent with spi_write_register()
+		 * and make error handling simpler even though this isn't a SPI master.
+		 */
+		return SPI_INVALID_OPCODE;
 	}
 	msg_pdbg("Writing status register\n");
 
