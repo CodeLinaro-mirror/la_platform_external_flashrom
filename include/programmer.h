@@ -307,6 +307,14 @@ extern bool programmer_may_write;
 extern unsigned long flashbase;
 char *extract_programmer_param_str(const struct programmer_cfg *cfg, const char *param_name);
 
+struct flash_region {
+	const char *name;
+	unsigned int start;
+	unsigned int end;
+	bool read_prot;
+	bool write_prot;
+};
+
 /* spi.c */
 #define MAX_DATA_UNSPECIFIED 0
 #define MAX_DATA_READ_UNLIMITED 64 * 1024
@@ -332,6 +340,7 @@ struct spi_master {
 	int (*write_aai)(struct flashctx *flash, const uint8_t *buf, unsigned int start, unsigned int len);
 	int (*shutdown)(void *data);
 	bool (*probe_opcode)(struct flashctx *flash, uint8_t opcode);
+	void (*get_region)(const struct flashctx *flash, unsigned int addr, struct flash_region *region);
 	void *data;
 };
 
@@ -414,14 +423,6 @@ int sb600_probe_spi(const struct programmer_cfg *cfg, struct pci_dev *dev);
 /* wbsio_spi.c */
 int wbsio_check_for_spi(void);
 #endif
-
-struct flash_region {
-	const char *name;
-	unsigned int start;
-	unsigned int end;
-	bool read_prot;
-	bool write_prot;
-};
 
 /* opaque.c */
 struct opaque_master {

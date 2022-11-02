@@ -373,6 +373,8 @@ static void get_flash_region(const struct flashctx *flash, int addr, struct flas
 {
 	if ((flash->mst->buses_supported & BUS_PROG) && flash->mst->opaque.get_region) {
 		flash->mst->opaque.get_region(flash, addr, region);
+	} else if (flash->mst->buses_supported & BUS_SPI && flash->mst->spi.get_region) {
+		flash->mst->spi.get_region(flash, addr, region);
 	} else {
 		region->name = "";
 		region->start = 0;
