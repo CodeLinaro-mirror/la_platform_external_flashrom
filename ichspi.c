@@ -1698,7 +1698,6 @@ static int ich_hwseq_read(struct flashctx *flash, uint8_t *buf,
 			  unsigned int addr, unsigned int len)
 {
 	uint8_t block_len;
-	int result = 0, chunk_status = 0;
 	const struct hwseq_data *hwseq_data = get_hwseq_data_from_context(flash);
 
 	if (addr + len > flash->chip->total_size * 1024) {
@@ -1717,29 +1716,16 @@ static int ich_hwseq_read(struct flashctx *flash, uint8_t *buf,
 		/* as well as flash chip page borders as demanded in the Intel datasheets. */
 		block_len = min(block_len, 256 - (addr & 0xFF));
 
-		/* Check flash region permissions before reading */
-		chunk_status = check_access(flash, addr, block_len, false);
-		if (chunk_status) {
-			if (chunk_status == SPI_ACCESS_DENIED) {
-				/* fill this chunk with 0xff bytes and
-				 * inform the caller about the error */
-				memset(buf, 0xff, block_len);
-				result = chunk_status;
-			} else {
-				return chunk_status;
-			}
-		} else {
-			if (ich_exec_sync_hwseq_xfer(flash, HSFC_CYCLE_READ, addr, block_len, ich_generation,
-				hwseq_data->addr_mask))
-				return 1;
-			ich_read_data(buf, block_len, ICH9_REG_FDATA0);
-		}
+		if (ich_exec_sync_hwseq_xfer(flash, HSFC_CYCLE_READ, addr, block_len, ich_generation,
+			hwseq_data->addr_mask))
+			return 1;
+		ich_read_data(buf, block_len, ICH9_REG_FDATA0);
 
 		addr += block_len;
 		buf += block_len;
 		len -= block_len;
 	}
-	return result;
+	return 0;
 }
 
 static int ich_hwseq_write(struct flashctx *flash, const uint8_t *buf, unsigned int addr, unsigned int len)
@@ -1762,10 +1748,6 @@ static int ich_hwseq_write(struct flashctx *flash, const uint8_t *buf, unsigned 
 		block_len = min(len, flash->mst->opaque.max_data_write);
 		/* as well as flash chip page borders as demanded in the Intel datasheets. */
 		block_len = min(block_len, 256 - (addr & 0xFF));
-		/* Check flash region permissions before writing */
-		int result = check_access(flash, addr, block_len, true);
-		if (result)
-			return result;
 		ich_fill_data(buf, block_len, ICH9_REG_FDATA0);
 
 		if (ich_exec_sync_hwseq_xfer(flash, HSFC_CYCLE_WRITE, addr, block_len, ich_generation,
