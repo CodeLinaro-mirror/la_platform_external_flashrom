@@ -63,6 +63,7 @@ static void teardown(struct flashrom_layout **layout)
 static const struct flashchip chip_W25Q128_V = {
 	.vendor		= "aklm&dummyflasher",
 	.total_size	= 16 * 1024,
+	.page_size	= 1024,
 	.tested		= TEST_OK_PREW,
 	.read		= SPI_CHIP_READ,
 	.write		= SPI_CHIP_WRITE256,
@@ -268,6 +269,14 @@ void full_chip_erase_with_wp_dummyflasher_test_success(void **state)
 	   this stage WP is not enabled and erase completes successfully. */
 	assert_int_equal(0, flashrom_flash_erase(&flash));
 
+	/* Write non-erased value to entire chip so that erase operations cannot
+	 * be optimized away. */
+	unsigned long size = flashrom_flash_getsize(&flash);
+	uint8_t *const contents = malloc(size);
+	memset(contents, UNERASED_VALUE(&flash), size);
+	assert_int_equal(0, flashrom_image_write(&flash, contents, size, NULL));
+	free(contents);
+
 	assert_int_equal(0, flashrom_wp_read_cfg(wp_cfg, &flash));
 
 	/* Hardware-protect first 4 KiB. */
@@ -279,10 +288,7 @@ void full_chip_erase_with_wp_dummyflasher_test_success(void **state)
 	/* Try erasing the chip again. Now that WP is active, the first 4 KiB is
 	   protected and we're trying to erase the whole chip, erase should
 	   fail. */
-
-	// FIXME(b/237620197): check that erasing the flash fails, i.e.
-	// assert_int_equal(1, flashrom_flash_erase(&flash));
-	flashrom_flash_erase(&flash);
+	assert_int_equal(1, flashrom_flash_erase(&flash));
 
 	teardown(&layout);
 
