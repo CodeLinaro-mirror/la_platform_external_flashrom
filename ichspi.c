@@ -2014,6 +2014,7 @@ static const struct spi_master spi_master_ich9 = {
 	.write_256	= default_spi_write_256,
 	.write_aai	= default_spi_write_aai,
 	.probe_opcode	= ich_spi_probe_opcode,
+	.get_region	= ich_get_region,
 };
 
 static struct opaque_master opaque_master_ich_hwseq = {
