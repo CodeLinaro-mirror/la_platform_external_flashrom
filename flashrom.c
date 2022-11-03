@@ -356,8 +356,8 @@ static void get_flash_region(const struct flashctx *flash, int addr, struct flas
 
 /*
  * Check flash access for addresses in the range [start, start+len-1].
- * If rw=0, checks if entire range is writable.
- * If rw=1, checks if entire range is readable.
+ * If rw=0, checks if entire range is readable.
+ * If rw=1, checks if entire range is writable.
  */
 int check_access(const struct flashctx *flash, unsigned int start, unsigned int len, bool rw)
 {
@@ -1238,7 +1238,7 @@ static int erase_and_write_block_helper(struct flashctx *const flash,
 		all_skipped = false;
 		msg_cdbg(" E");
 
-		if (check_access(flash, info->erase_start, erase_len, 0)) {
+		if (check_access(flash, info->erase_start, erase_len, 1)) {
 			msg_cdbg(" DENIED");
 			return SPI_ACCESS_DENIED;
 		}
@@ -1269,7 +1269,7 @@ static int erase_and_write_block_helper(struct flashctx *const flash,
 		if (!writecount++)
 			msg_cdbg(" W");
 
-		if (check_access(flash, info->erase_start + starthere, lenhere, 0)) {
+		if (check_access(flash, info->erase_start + starthere, lenhere, 1)) {
 			msg_cdbg(" DENIED");
 			return SPI_ACCESS_DENIED;
 		}
