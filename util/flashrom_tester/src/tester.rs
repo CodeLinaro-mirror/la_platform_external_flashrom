@@ -440,6 +440,11 @@ pub fn collate_all_test_runs(
 ) {
     match format {
         OutputFormat::Pretty => {
+            let color = if atty::is(atty::Stream::Stdout) {
+                types::COLOR
+            } else {
+                types::NOCOLOR
+            };
             println!();
             println!("  =============================");
             println!("  =====  AVL qual RESULTS  ====");
@@ -459,8 +464,8 @@ pub fn collate_all_test_runs(
                 if *result != TestConclusion::Pass {
                     println!(
                         " {} {}",
-                        style!(format!(" <+> {} test:", name), types::BOLD),
-                        style_dbg!(result, types::RED)
+                        style!(format!(" <+> {} test:", name), color.bold, color),
+                        style_dbg!(result, color.red, color)
                     );
                     match error {
                         None => {}
@@ -469,8 +474,8 @@ pub fn collate_all_test_runs(
                 } else {
                     println!(
                         " {} {}",
-                        style!(format!(" <+> {} test:", name), types::BOLD),
-                        style_dbg!(result, types::GREEN)
+                        style!(format!(" <+> {} test:", name), color.bold, color),
+                        style_dbg!(result, color.green, color)
                     );
                 }
             }
