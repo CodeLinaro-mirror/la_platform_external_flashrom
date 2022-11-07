@@ -45,6 +45,7 @@ config_default_programmer_name = get_option('default_programmer_name')
 config_default_programmer_args = get_option('default_programmer_args')
 
 cargs = []
+link_args = []
 deps = []
 srcs = files(
   '82802ab.c',
@@ -557,10 +558,16 @@ endif
 
 cargs += '-DCONFIG_DEFAULT_PROGRAMMER_ARGS="' + config_default_programmer_args + '"'
 
+if get_option('llvm_cov').enabled()
+  cargs += ['-fprofile-instr-generate', '-fcoverage-mapping']
+  link_args += ['-fprofile-instr-generate', '-fcoverage-mapping']
+endif
+
 install_headers([
     'include/libflashrom.h',
   ],
 )
+
 include_dir = include_directories('include')
 
 mapfile = 'libflashrom.map'
@@ -584,7 +591,7 @@ libflashrom = both_libraries(
     cargs,
   ],
   install : true,
-  link_args : vflag,
+  link_args : link_args + [vflag],
   link_depends : mapfile,
 )
 
@@ -618,7 +625,7 @@ configure_file(
 )
 
 if get_option('classic_cli').auto() or get_option('classic_cli').enabled()
-  executable(
+  classic_cli = executable(
     'flashrom',
     files(
       'cli_classic.c',
@@ -629,8 +636,12 @@ if get_option('classic_cli').auto() or get_option('classic_cli').enabled()
     include_directories : include_dir,
     install : true,
     install_dir : get_option('sbindir'),
+    link_args : link_args,
     link_with : libflashrom.get_static_lib(), # flashrom needs internal symbols of libflashrom
   )
+  if get_option('llvm_cov').enabled()
+    run_target('llvm-cov-cli', command : ['scripts/llvm-cov', classic_cli])
+  endif
 endif
 
 if get_option('ich_descriptors_tool').auto() or get_option('ich_descriptors_tool').enabled()
