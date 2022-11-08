@@ -230,19 +230,6 @@ int internal_init(const struct programmer_cfg *cfg)
 	}
 #endif // if IS_X86
 
-#if IS_ARM
-	/* TODO(b/190782852): delete this linux_spi initialization code.
-	 *
-	 * Gale/Breeze devices may still expose the flash as a plain SPI device
-	 * rather than an MTD, so we may need to use linux_spi to access it.
-	 */
-	const char dev[] = "dev=/dev/spidev0.0";
-	char dev_mut[sizeof(dev)];
-	memcpy(dev_mut, dev, sizeof(dev));
-	if (!programmer_init(&programmer_linux_spi, dev_mut)) {
-		return 0;
-	}
-#endif
 	if (processor_flash_enable()) {
 		msg_perr("Processor detection/init failed.\n"
 			 "Aborting.\n");
