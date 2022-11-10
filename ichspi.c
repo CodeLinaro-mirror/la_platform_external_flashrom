@@ -1451,6 +1451,7 @@ static void ich_start_hwseq_xfer(uint32_t hsfc_cycle, uint32_t flash_addr, size_
 	hsfc = REGREAD16(ICH9_REG_HSFC);
 	hsfc &= ~g_hwseq_data.hsfc_fcycle; /* clear operation */
 	hsfc |= hsfc_cycle;
+	hsfc &= ~HSFC_FDBC; /* clear byte count */
 	hsfc |= HSFC_FDBC_VAL(len - 1);
 	hsfc |= HSFC_FGO; /* start */
 	prettyprint_ich9_reg_hsfc(hsfc, ich_generation);
