@@ -1001,7 +1001,7 @@ notfound:
 }
 
 /*
- * read_flash - wrapper for flash->read() with additional high-level policy
+ * cros_read_flash - wrapper for flash->read() with additional high-level policy
  *
  * @flash	flash chip
  * @buf		buffer to store data in
@@ -1011,7 +1011,7 @@ notfound:
  * This wrapper simplifies most cases when the flash chip needs to be read
  * since policy decisions such as non-fatal error handling is centralized.
  */
-static int read_flash(struct flashctx *flash, uint8_t *buf,
+static int cros_read_flash(struct flashctx *flash, uint8_t *buf,
 		      unsigned int start, unsigned int len)
 {
 	int ret;
@@ -1155,7 +1155,7 @@ static int read_by_layout(struct flashctx *const flashctx, uint8_t *const buffer
 		    round_to_erasable_block_boundary(required_erase_size, entry,
 						     &region_start, &region_len))
 			return 1;
-		if (read_flash(flashctx, buffer + region_start, region_start, region_len))
+		if (cros_read_flash(flashctx, buffer + region_start, region_start, region_len))
 			return 1;
 	}
 	return 0;
@@ -1780,7 +1780,7 @@ static int setup_curcontents(struct flashctx *flashctx, void *curcontents,
 		 */
 		msg_cinfo("Reading old flash chip contents... ");
 		if (verify_all) {
-			if (read_flash(flashctx, curcontents, 0, flash_size)) {
+			if (cros_read_flash(flashctx, curcontents, 0, flash_size)) {
 				msg_cinfo("FAILED.\n");
 				return 1;
 			}
@@ -1940,7 +1940,7 @@ int flashrom_image_write(struct flashctx *const flashctx, void *const buffer, co
 		if (verify_all) {
 			msg_cerr("Checking if anything has changed.\n");
 			msg_cinfo("Reading current flash chip contents... ");
-			if (!read_flash(flashctx, curcontents, 0, flash_size)) {
+			if (!cros_read_flash(flashctx, curcontents, 0, flash_size)) {
 				msg_cinfo("done.\n");
 				if (!memcmp(oldcontents, curcontents, flash_size)) {
 					nonfatal_help_message();
