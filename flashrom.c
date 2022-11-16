@@ -1122,13 +1122,7 @@ notfound:
 static int write_flash(struct flashctx *flash, const uint8_t *buf,
 		       unsigned int start, unsigned int len)
 {
-	if (!flash)
-		return -1;
-
 	write_func_t *write_func = lookup_write_func_ptr(flash->chip);
-	if (!write_func)
-		return -1;
-
 	return write_func(flash, buf, start, len);
 }
 
