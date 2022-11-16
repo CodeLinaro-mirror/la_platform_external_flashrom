@@ -556,10 +556,33 @@ static read_func_t *lookup_read_func_ptr(const struct flashchip *chip)
 	return NULL;
 }
 
+/*
+ * read_flash - wrapper for flash->read() with additional high-level policy
+ *
+ * @flash	flash chip
+ * @buf		buffer to store data in
+ * @start	start address
+ * @len		number of bytes to read
+ *
+ * This wrapper simplifies most cases when the flash chip needs to be read
+ * since policy decisions such as non-fatal error handling is centralized.
+ */
 int read_flash(struct flashctx *flash, uint8_t *buf, unsigned int start, unsigned int len)
 {
+	msg_cdbg("%#06x-%#06x:R ", start, start + len - 1);
+
 	read_func_t *read_func = lookup_read_func_ptr(flash->chip);
-	return read_func(flash, buf, start, len);
+	int ret = read_func(flash, buf, start, len);
+	if (ret) {
+		if (ret == SPI_ACCESS_DENIED) {
+			msg_gdbg("ignoring error when reading 0x%x-0x%x\n", start, start + len - 1);
+			return 0;
+		} else {
+			msg_gdbg("failed to read 0x%x-0x%x\n", start, start + len - 1);
+		}
+	}
+
+	return ret;
 }
 
 /*
@@ -1086,46 +1109,6 @@ notfound:
 }
 
 /*
- * cros_read_flash - wrapper for flash->read() with additional high-level policy
- *
- * @flash	flash chip
- * @buf		buffer to store data in
- * @start	start address
- * @len		number of bytes to read
- *
- * This wrapper simplifies most cases when the flash chip needs to be read
- * since policy decisions such as non-fatal error handling is centralized.
- */
-static int cros_read_flash(struct flashctx *flash, uint8_t *buf,
-		      unsigned int start, unsigned int len)
-{
-	int ret;
-
-	if (!flash)
-		return -1;
-
-	read_func_t *read_func = lookup_read_func_ptr(flash->chip);
-	if (!read_func)
-		return -1;
-
-	msg_cdbg("%#06x-%#06x:R ", start, start + len - 1);
-
-	ret = read_func(flash, buf, start, len);
-	if (ret) {
-		if (ret == SPI_ACCESS_DENIED) {
-			msg_gdbg("ignoring error when reading 0x%x-0x%x\n",
-					start, start + len - 1);
-			ret = 0;
-		} else {
-			msg_gdbg("failed to read 0x%x-0x%x\n",
-					start, start + len - 1);
-		}
-	}
-
-	return ret;
-}
-
-/*
  * write_flash - wrapper for flash->write() with additional high-level policy
  *
  * @flash	flash chip
@@ -1244,7 +1227,7 @@ static int read_by_layout(struct flashctx *const flashctx, uint8_t *const buffer
 		    round_to_erasable_block_boundary(required_erase_size, entry,
 						     &region_start, &region_len))
 			return 1;
-		if (cros_read_flash(flashctx, buffer + region_start, region_start, region_len))
+		if (read_flash(flashctx, buffer + region_start, region_start, region_len))
 			return 1;
 	}
 	return 0;
@@ -1870,7 +1853,7 @@ static int setup_curcontents(struct flashctx *flashctx, void *curcontents,
 		 */
 		msg_cinfo("Reading old flash chip contents... ");
 		if (verify_all) {
-			if (cros_read_flash(flashctx, curcontents, 0, flash_size)) {
+			if (read_flash(flashctx, curcontents, 0, flash_size)) {
 				msg_cinfo("FAILED.\n");
 				return 1;
 			}
@@ -2030,7 +2013,7 @@ int flashrom_image_write(struct flashctx *const flashctx, void *const buffer, co
 		if (verify_all) {
 			msg_cerr("Checking if anything has changed.\n");
 			msg_cinfo("Reading current flash chip contents... ");
-			if (!cros_read_flash(flashctx, curcontents, 0, flash_size)) {
+			if (!read_flash(flashctx, curcontents, 0, flash_size)) {
 				msg_cinfo("done.\n");
 				if (!memcmp(oldcontents, curcontents, flash_size)) {
 					nonfatal_help_message();
