@@ -1451,6 +1451,12 @@ static void ich_start_hwseq_xfer(const struct flashctx *flash,
 
 	/* Set up transaction parameters. */
 	hsfc |= hsfc_cycle;
+	/*
+	 * The number of bytes transferred is the value of `FDBC` plus 1, hence,
+	 * subtracted 1 from the length field.
+	 * As per Intel EDS, `0b` in the FDBC represents 1 byte while `0x3f`
+	 * represents 64-bytes to be transferred.
+	 */
 	hsfc |= HSFC_FDBC_VAL(len - 1);
 	hsfc |= HSFC_FGO; /* start */
 	prettyprint_ich9_reg_hsfc(hsfc, ich_generation);
@@ -1506,7 +1512,7 @@ static int ich_hwseq_read_status(const struct flashctx *flash, enum flash_reg re
 	}
 	msg_pdbg("Reading Status register\n");
 
-	if (ich_exec_sync_hwseq_xfer(flash, HSFC_CYCLE_RD_STATUS, 0, len, ich_generation,
+	if (ich_exec_sync_hwseq_xfer(flash, HSFC_CYCLE_RD_STATUS, 1, len, ich_generation,
 		hwseq_data->addr_mask)) {
 		msg_perr("Reading Status register failed\n!!");
 		return -1;
@@ -1529,7 +1535,7 @@ static int ich_hwseq_write_status(const struct flashctx *flash, enum flash_reg r
 
 	ich_fill_data(&value, len, ICH9_REG_FDATA0);
 
-	if (ich_exec_sync_hwseq_xfer(flash, HSFC_CYCLE_WR_STATUS, 0, len, ich_generation,
+	if (ich_exec_sync_hwseq_xfer(flash, HSFC_CYCLE_WR_STATUS, 1, len, ich_generation,
 		hwseq_data->addr_mask)) {
 		msg_perr("Writing Status register failed\n!!");
 		return -1;
@@ -1545,7 +1551,7 @@ static int ich_hwseq_get_flash_id(struct flashctx *flash, enum ich_chipset ich_g
 	const int len = sizeof(data);
 	const struct hwseq_data *hwseq_data = get_hwseq_data_from_context(flash);
 
-	if (ich_exec_sync_hwseq_xfer(flash, HSFC_CYCLE_RDID, 0, len, ich_generation,
+	if (ich_exec_sync_hwseq_xfer(flash, HSFC_CYCLE_RDID, 1, len, ich_generation,
 		hwseq_data->addr_mask)) {
 		msg_perr("Timed out waiting for RDID to complete.\n");
 		return 0;
@@ -1682,7 +1688,7 @@ static int ich_hwseq_block_erase(struct flashctx *flash, unsigned int addr,
 
 	msg_pdbg("Erasing %d bytes starting at 0x%06x.\n", len, addr);
 
-	if (ich_exec_sync_hwseq_xfer(flash, HSFC_CYCLE_BLOCK_ERASE, addr, 0, ich_generation,
+	if (ich_exec_sync_hwseq_xfer(flash, HSFC_CYCLE_BLOCK_ERASE, addr, 1, ich_generation,
 		hwseq_data->addr_mask))
 		return -1;
 	return 0;
