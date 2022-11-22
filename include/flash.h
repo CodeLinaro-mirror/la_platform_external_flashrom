@@ -552,7 +552,6 @@ int prepare_flash_access(struct flashctx *, bool read_it, bool write_it, bool er
 void finalize_flash_access(struct flashctx *);
 int register_chip_restore(chip_restore_fn_cb_t func, struct flashctx *flash, uint8_t status);
 
-int check_access(const struct flashctx *flash, unsigned int start, unsigned int len, bool rw);
 erasefunc_t *lookup_erase_func_ptr(const struct block_eraser *const eraser);
 
 /* Something happened that shouldn't happen, but we can go on. */
