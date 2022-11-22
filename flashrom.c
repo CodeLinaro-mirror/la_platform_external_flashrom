@@ -1481,11 +1481,6 @@ static int erase_and_write_block_helper(struct flashctx *const flash,
 		if (!writecount++)
 			msg_cdbg(" W");
 
-		if (check_access(flash, info->erase_start + starthere, lenhere, 1)) {
-			msg_cdbg(" DENIED");
-			return 0;
-		}
-
 		/* Needs the partial write function signature. */
 		ret = write_flash(flash, (uint8_t *)info->newcontents + starthere,
 				   info->erase_start + starthere, lenhere);
