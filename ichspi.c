@@ -1715,7 +1715,6 @@ static int ich_hwseq_read(struct flashctx *flash, uint8_t *buf,
 			hwseq_data->addr_mask))
 			return 1;
 		ich_read_data(buf, block_len, ICH9_REG_FDATA0);
-
 		addr += block_len;
 		buf += block_len;
 		len -= block_len;
@@ -1891,7 +1890,6 @@ static enum ich_access_protection ich9_handle_frap(uint32_t frap, unsigned int i
 
 	base  = ICH_FREG_BASE(freg);
 	limit = ICH_FREG_LIMIT(freg);
-
 	if (base > limit || (freg == 0 && i > 0)) {
 		/* this FREG is disabled */
 		msg_pdbg2("0x%02X: 0x%08x FREG%u: %s region is unused.\n",
