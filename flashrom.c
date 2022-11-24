@@ -1444,7 +1444,10 @@ static int erase_and_write_block_helper(struct flashctx *const flash,
 
 		ret = erasefn(flash, info->erase_start, erase_len);
 		if (ret) {
-			msg_cerr(" ERASE_FAILED\n");
+			if (ret == SPI_ACCESS_DENIED) /* from cros_ec erase path. */
+				msg_cdbg(" DENIED");
+			else
+				msg_cerr(" ERASE_FAILED\n");
 			return ret;
 		}
 
