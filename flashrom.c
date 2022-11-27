@@ -949,6 +949,55 @@ static write_func_t *lookup_write_func_ptr(const struct flashchip *chip)
 	return NULL;
 }
 
+/*
+ * write_flash - wrapper for flash->write() with additional high-level policy
+ *
+ * @param flash flash chip
+ * @param buf   buffer to write to flash
+ * @param start start address in flash
+ * @param len   number of bytes to write
+ * @return      0 on success,
+ *              -1 if any write fails.
+ *
+ * This wrapper simplifies most cases when the flash chip needs to be written
+ * since policy decisions such as non-fatal error handling is centralized.
+ */
+static int write_flash(struct flashctx *flash, const uint8_t *buf,
+		       unsigned int start, unsigned int len)
+{
+	unsigned int addr = start;
+	while (addr < start + len) {
+		struct flash_region region;
+		get_flash_region(flash, addr, &region);
+
+		unsigned int write_len = min(start + len, region.end) - addr;
+		const uint8_t *rbuf = buf + addr - start;
+
+		if (region.write_prot) {
+			msg_gdbg("%s: cannot write inside %s region (%#08x..%#08x), skipping (%#08x..%#08x).\n",
+				 __func__, region.name, region.start, region.end - 1, addr, addr + write_len - 1);
+		} else {
+			msg_gdbg("%s: %s region (%#08x..%#08x) is writable, writing range (%#08x..%#08x).\n",
+				 __func__, region.name, addr, addr + write_len - 1, region.start, region.end - 1);
+
+			write_func_t *write_func = lookup_write_func_ptr(flash->chip);
+			int ret = write_func(flash, rbuf, addr, write_len);
+			if (ret == SPI_ACCESS_DENIED) {
+				/* TODO(quasisec):/ This branch should be unreachable, remove. */
+				msg_gdbg("BUG: ignoring error when writing 0x%x-0x%x\n", addr, addr + write_len - 1);
+				ret = 0;
+			} else if (ret) {
+				msg_gdbg("%s: failed to write (%#08x..%#08x).\n", __func__, addr, addr + write_len - 1);
+				return -1;
+			}
+		}
+
+		addr += write_len;
+	}
+
+	return 0;
+}
+
 typedef int (probe_func_t)(struct flashctx *flash);
 
 static probe_func_t *lookup_probe_func_ptr(const struct flashchip *chip)
@@ -1101,55 +1150,6 @@ notfound:
 
 	/* Return position of matching chip. */
 	return chip - flashchips;
-}
-
-/*
- * write_flash - wrapper for flash->write() with additional high-level policy
- *
- * @param flash flash chip
- * @param buf   buffer to write to flash
- * @param start start address in flash
- * @param len   number of bytes to write
- * @return      0 on success,
- *              -1 if any write fails.
- *
- * This wrapper simplifies most cases when the flash chip needs to be written
- * since policy decisions such as non-fatal error handling is centralized.
- */
-static int write_flash(struct flashctx *flash, const uint8_t *buf,
-		       unsigned int start, unsigned int len)
-{
-	unsigned int addr = start;
-	while (addr < start + len) {
-		struct flash_region region;
-		get_flash_region(flash, addr, &region);
-
-		unsigned int write_len = min(start + len, region.end) - addr;
-		const uint8_t *rbuf = buf + addr - start;
-
-		if (region.write_prot) {
-			msg_gdbg("%s: cannot write inside %s region (%#08x..%#08x), skipping (%#08x..%#08x).\n",
-				 __func__, region.name, region.start, region.end - 1, addr, addr + write_len - 1);
-		} else {
-			msg_gdbg("%s: %s region (%#08x..%#08x) is writable, writing range (%#08x..%#08x).\n",
-				 __func__, region.name, addr, addr + write_len - 1, region.start, region.end - 1);
-
-			write_func_t *write_func = lookup_write_func_ptr(flash->chip);
-			int ret = write_func(flash, rbuf, addr, write_len);
-			if (ret == SPI_ACCESS_DENIED) {
-				/* TODO(quasisec):/ This branch should be unreachable, remove. */
-				msg_gdbg("BUG: ignoring error when writing 0x%x-0x%x\n", addr, addr + write_len - 1);
-				ret = 0;
-			} else if (ret) {
-				msg_gdbg("%s: failed to write (%#08x..%#08x).\n", __func__, addr, addr + write_len - 1);
-				return -1;
-			}
-		}
-
-		addr += write_len;
-	}
-
-	return 0;
 }
 
 /*
