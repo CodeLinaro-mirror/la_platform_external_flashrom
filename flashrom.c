@@ -2053,6 +2053,8 @@ int flashrom_image_write(struct flashctx *const flashctx, void *const buffer, co
 				msg_cerr("Apparently at least some data has changed.\n");
 			} else
 				msg_cerr("Can't even read anymore!\n");
+			emergency_help_message();
+			goto _finalize_ret;
 		} else {
 			msg_cerr("\n");
 		}
@@ -2100,6 +2102,7 @@ int flashrom_image_write(struct flashctx *const flashctx, void *const buffer, co
 		else
 			msg_cinfo("VERIFIED.\n");
 	} else {
+		/* We didn't change anything. */
 		ret = 0;
 	}
 
