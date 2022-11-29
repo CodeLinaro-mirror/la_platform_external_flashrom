@@ -331,8 +331,8 @@ struct spi_master {
 	int (*write_aai)(struct flashctx *flash, const uint8_t *buf, unsigned int start, unsigned int len);
 	int (*shutdown)(void *data);
 	bool (*probe_opcode)(const struct flashctx *flash, uint8_t opcode);
-	void (*get_region)(const struct flashctx *flash, unsigned int addr, struct flash_region *region);
 	void (*delay) (const struct flashctx *flash, unsigned int usecs);
+	void (*get_region)(const struct flashctx *flash, unsigned int addr, struct flash_region *region);
 	void *data;
 };
 
