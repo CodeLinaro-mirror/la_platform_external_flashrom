@@ -1863,7 +1863,7 @@ void finalize_flash_access(struct flashctx *const flash)
 }
 
 static int setup_curcontents(struct flashctx *flashctx, void *curcontents,
-			     int erase_it, const void *const refcontents)
+			     const void *const refcontents)
 {
 	const size_t flash_size = flashctx->chip->total_size * 1024;
 	const bool verify_all = flashctx->flags.verify_whole_chip;
@@ -1919,7 +1919,7 @@ int flashrom_flash_erase(struct flashctx *const flashctx)
 	if (prepare_flash_access(flashctx, false, false, true, false))
 		goto _free_ret;
 
-	if (setup_curcontents(flashctx, curcontents, true, NULL))
+	if (setup_curcontents(flashctx, curcontents, NULL))
 		goto _finalize_ret;
 
 	memset(newcontents, ERASED_VALUE(flashctx), flash_size);
@@ -2024,7 +2024,7 @@ int flashrom_image_write(struct flashctx *const flashctx, void *const buffer, co
 	if (prepare_flash_access(flashctx, false, true, false, verify))
 		goto _free_ret;
 
-	if (setup_curcontents(flashctx, curcontents, false, refbuffer))
+	if (setup_curcontents(flashctx, curcontents, refbuffer))
 		goto _finalize_ret;
 	if (oldcontents)
 		memcpy(oldcontents, curcontents, flash_size);
@@ -2069,7 +2069,7 @@ int flashrom_image_write(struct flashctx *const flashctx, void *const buffer, co
 	} else if (tmp > 0) {
 		// Need 2nd pass. Get the just written content.
 		msg_pdbg("CROS_EC needs 2nd pass.\n");
-		if (setup_curcontents(flashctx, curcontents, false, NULL)) {
+		if (setup_curcontents(flashctx, curcontents, NULL)) {
 			emergency_help_message();
 			goto _finalize_ret;
 		}
