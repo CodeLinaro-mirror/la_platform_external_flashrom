@@ -306,14 +306,6 @@ extern bool programmer_may_write;
 extern unsigned long flashbase;
 char *extract_programmer_param_str(const struct programmer_cfg *cfg, const char *param_name);
 
-struct flash_region {
-	const char *name;
-	unsigned int start;
-	unsigned int end;
-	bool read_prot;
-	bool write_prot;
-};
-
 /* spi.c */
 #define MAX_DATA_UNSPECIFIED 0
 #define MAX_DATA_READ_UNLIMITED 64 * 1024

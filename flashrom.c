@@ -399,7 +399,7 @@ static void get_flash_region(const struct flashctx *flash, int addr, struct flas
 	} else if (flash->mst->buses_supported & BUS_SPI && flash->mst->spi.get_region) {
 		flash->mst->spi.get_region(flash, addr, region);
 	} else {
-		region->name = "";
+		region->name = strdup("");
 		region->start = 0;
 		region->end = flashrom_flash_getsize(flash);
 		region->read_prot = false;
@@ -583,11 +583,13 @@ int read_flash(struct flashctx *flash, uint8_t *buf, unsigned int start, unsigne
 		if (region.read_prot) {
 			msg_gdbg("%s: cannot read inside %s region (%#08x..%#08x), filling (%#08x..%#08x) with 0xff instead.\n",
 				 __func__, region.name, region.start, region.end - 1, addr, addr + read_len - 1);
+			free(region.name);
 
 			memset(rbuf, ERASED_VALUE(flash), read_len);
 		} else {
 			msg_gdbg("%s: %s region (%#08x..%#08x) is readable, reading range (%#08x..%#08x).\n",
 				 __func__, region.name, addr, addr + read_len - 1, region.start, region.end - 1);
+			free(region.name);
 
 			read_func_t *read_func = lookup_read_func_ptr(flash->chip);
 			int ret = read_func(flash, rbuf, addr, read_len);
@@ -645,11 +647,13 @@ int verify_range(struct flashctx *flash, const uint8_t *cmpbuf, unsigned int sta
 		 */
 		if (region.write_prot || region.read_prot) {
 			msg_gdbg("%s: skipping %s region (%#08x..%#08x)\n", __func__, region.name, region.start, region.end - 1);
+			free(region.name);
 
 			i = region.end;
 			continue;
 		}
 		msg_gdbg("%s: verifying %s region (%#08x..%#08x)\n", __func__, region.name, region.start, region.end - 1);
+		free(region.name);
 
 		unsigned int read_len = min(start + len, region.end) - i;
 
@@ -998,9 +1002,11 @@ static int write_flash(struct flashctx *flash, const uint8_t *buf,
 		if (region.write_prot) {
 			msg_gdbg("%s: cannot write inside %s region (%#08x..%#08x), skipping (%#08x..%#08x).\n",
 				 __func__, region.name, region.start, region.end - 1, addr, addr + write_len - 1);
+			free(region.name);
 		} else {
 			msg_gdbg("%s: %s region (%#08x..%#08x) is writable, writing range (%#08x..%#08x).\n",
 				 __func__, region.name, addr, addr + write_len - 1, region.start, region.end - 1);
+			free(region.name);
 
 			write_func_t *write_func = lookup_write_func_ptr(flash->chip);
 			int ret = write_func(flash, rbuf, addr, write_len);
@@ -1218,16 +1224,17 @@ static int round_to_erasable_block_boundary(const int required_erase_size,
 					    chipoff_t *rounded_start,
 					    chipsize_t* rounded_len) {
 	unsigned int start_align, len_align;
+	const struct flash_region *region = &entry->region;
 
 	if (required_erase_size < 0)
 		return 1;
 
 	/* round down to nearest eraseable block boundary */
-	start_align = entry->start % required_erase_size;
-	*rounded_start = entry->start - start_align;
+	start_align = region->start % required_erase_size;
+	*rounded_start = region->start - start_align;
 
 	/* round up to nearest eraseable block boundary */
-	*rounded_len = entry->end - *rounded_start + 1;
+	*rounded_len = region->end - *rounded_start + 1;
 	len_align = *rounded_len % required_erase_size;
 	if (len_align)
 		*rounded_len = *rounded_len + required_erase_size - len_align;
@@ -1236,7 +1243,7 @@ static int round_to_erasable_block_boundary(const int required_erase_size,
 		msg_gdbg("\n%s: Re-aligned partial read due to eraseable "
 			 "block size requirement:\n\tstart: 0x%06x, "
 			 "len: 0x%06x, aligned start: 0x%06x, len: 0x%06x\n",
-			 __func__, entry->start, entry->end - entry->start + 1,
+			 __func__, region->start, region->end - region->start + 1,
 			 *rounded_start, *rounded_len);
 	}
 
@@ -1262,8 +1269,9 @@ static int read_by_layout(struct flashctx *const flashctx, uint8_t *const buffer
 	int required_erase_size = get_required_erase_size(flashctx);
 
 	while ((entry = layout_next_included(layout, entry))) {
-		chipoff_t region_start	= entry->start;
-		chipsize_t region_len	= entry->end - entry->start + 1;
+		const struct flash_region *region = &entry->region;
+		chipoff_t region_start	= region->start;
+		chipsize_t region_len	= region->end - region->start + 1;
 
 		if (align_to_erasable_block_boundary &&
 		    round_to_erasable_block_boundary(required_erase_size, entry,
@@ -1459,6 +1467,7 @@ static int erase_and_write_block_helper(struct flashctx *const flash,
 		while (addr < info->erase_start + erase_len) {
 			struct flash_region region;
 			get_flash_region(flash, addr, &region);
+			free(region.name);
 
 			if (region.write_prot) {
 				msg_cdbg(" DENIED");
@@ -1569,8 +1578,9 @@ static int verify_by_layout(
 	int ret = 0;
 
 	while ((entry = layout_next_included(layout, entry))) {
-		const chipoff_t region_start	= entry->start;
-		const chipsize_t region_len	= entry->end - entry->start + 1;
+		const struct flash_region *region = &entry->region;
+		const chipoff_t region_start	= region->start;
+		const chipsize_t region_len	= region->end - region->start + 1;
 
 		if ((ret = verify_range(flashctx, newcontents + region_start,
 					region_start, region_len)))
@@ -1991,12 +2001,13 @@ static void combine_image_by_layout(const struct flashctx *const flashctx,
 	chipoff_t start = 0;
 
 	while ((included = layout_next_included_region(layout, start))) {
-		if (included->start > start) {
+		const struct flash_region *region = &included->region;
+		if (region->start > start) {
 			/* copy everything up to the start of this included region */
-			memcpy(newcontents + start, oldcontents + start, included->start - start);
+			memcpy(newcontents + start, oldcontents + start, region->start - start);
 		}
 		/* skip this included region */
-		start = included->end + 1;
+		start = region->end + 1;
 		if (start == 0)
 			return;
 	}

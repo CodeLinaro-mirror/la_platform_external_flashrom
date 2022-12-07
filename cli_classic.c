@@ -444,8 +444,9 @@ static int read_buf_from_include_args(const struct flashrom_layout *const layout
 	while ((entry = layout_next_included(layout, entry))) {
 		if (!entry->file)
 			continue;
-		if (read_buf_from_file(buf + entry->start,
-				       entry->end - entry->start + 1, entry->file))
+		const struct flash_region *region = &entry->region;
+		if (read_buf_from_file(buf + region->start,
+				       region->end - region->start + 1, entry->file))
 			return 1;
 	}
 	return 0;
@@ -470,8 +471,9 @@ static int write_buf_to_include_args(const struct flashrom_layout *const layout,
 	while ((entry = layout_next_included(layout, entry))) {
 		if (!entry->file)
 			continue;
-		if (write_buf_to_file(buf + entry->start,
-				      entry->end - entry->start + 1, entry->file))
+		const struct flash_region *region = &entry->region;
+		if (write_buf_to_file(buf + region->start,
+				      region->end - region->start + 1, entry->file))
 			return 1;
 	}
 
