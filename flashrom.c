@@ -601,38 +601,46 @@ static read_func_t *lookup_read_func_ptr(const struct flashchip *chip)
  */
 int read_flash(struct flashctx *flash, uint8_t *buf, unsigned int start, unsigned int len)
 {
-	unsigned int addr = start;
-	while (addr < start + len) {
+	unsigned int read_len;
+	for (unsigned int addr = start; addr < start + len; addr += read_len) {
 		struct flash_region region;
 		get_flash_region(flash, addr, &region);
 
-		unsigned int read_len = min(start + len, region.end) - addr;
+		read_len = min(start + len, region.end) - addr;
 		uint8_t *rbuf = buf + addr - start;
 
 		if (region.read_prot) {
-			msg_gdbg("%s: cannot read inside %s region (%#08x..%#08x), filling (%#08x..%#08x) with 0xff instead.\n",
-				 __func__, region.name, region.start, region.end - 1, addr, addr + read_len - 1);
-			free(region.name);
+			if (flash->flags.skip_unreadable_regions) {
+				msg_gdbg("%s: cannot read inside %s region (%#08x..%#08x), "
+					 "filling (%#08x..%#08x) with erased value instead.\n",
+					 __func__, region.name, region.start, region.end - 1,
+					 addr, addr + read_len - 1);
+				free(region.name);
 
-			memset(rbuf, ERASED_VALUE(flash), read_len);
-		} else {
-			msg_gdbg("%s: %s region (%#08x..%#08x) is readable, reading range (%#08x..%#08x).\n",
-				 __func__, region.name, addr, addr + read_len - 1, region.start, region.end - 1);
-			free(region.name);
-
-			read_func_t *read_func = lookup_read_func_ptr(flash->chip);
-			int ret = read_func(flash, rbuf, addr, read_len);
-			if (ret == SPI_ACCESS_DENIED) {
-				/* TODO(quasisec):/ This branch should be unreachable, remove. */
-				msg_gdbg("BUG: ignoring error when reading 0x%x-0x%x\n", addr, addr + read_len - 1);
-				ret = 0;
-			} else if (ret) {
-				msg_gdbg("%s: failed to read (%#08x..%#08x).\n", __func__, addr, addr + read_len - 1);
-				return -1;
+				memset(rbuf, ERASED_VALUE(flash), read_len);
+				continue;
 			}
+
+			msg_gerr("%s: cannot read inside %s region (%#08x..%#08x).\n",
+				 __func__, region.name, region.start, region.end - 1);
+			free(region.name);
+			return -1;
+		}
+		msg_gdbg("%s: %s region (%#08x..%#08x) is readable, reading range (%#08x..%#08x).\n",
+			 __func__, region.name, region.start, region.end - 1, addr, addr + read_len - 1);
+		free(region.name);
+
+		read_func_t *read_func = lookup_read_func_ptr(flash->chip);
+		int ret = read_func(flash, rbuf, addr, read_len);
+		if (ret == SPI_ACCESS_DENIED) {
+			/* TODO(quasisec):/ This branch should be unreachable, remove. */
+			msg_gdbg("BUG: ignoring error when reading 0x%x-0x%x\n", addr, addr + read_len - 1);
+			ret = 0;
+		} else if (ret) {
+			msg_gerr("%s: failed to read (%#08x..%#08x).\n", __func__, addr, addr + read_len - 1);
+			return -1;
 		}
 
-		addr += read_len;
 	}
 
 	return 0;
