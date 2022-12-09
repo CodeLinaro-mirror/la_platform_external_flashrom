@@ -675,34 +675,43 @@ int verify_range(struct flashctx *flash, const uint8_t *cmpbuf, unsigned int sta
 
 	msg_gdbg("%#06x..%#06x ", start, start + len - 1);
 
-	for (size_t i = start; i < start + len;) {
+	unsigned int read_len;
+	for (size_t addr = start; addr < start + len; addr += read_len) {
 		struct flash_region region;
-		get_flash_region(flash, i, &region);
-		/*
-		 * Verify only regions we could have both
-		 * written to and we can read back.
-		 */
-		if (region.write_prot || region.read_prot) {
-			msg_gdbg("%s: skipping %s region (%#08x..%#08x)\n", __func__, region.name, region.start, region.end - 1);
-			free(region.name);
+		get_flash_region(flash, addr, &region);
+		read_len = min(start + len, region.end) - addr;
 
-			i = region.end;
+		if ((region.write_prot && flash->flags.skip_unwritable_regions) ||
+		    (region.read_prot  && flash->flags.skip_unreadable_regions)) {
+			msg_gdbg("%s: Skipping verification of %s region (%#08x..%#08x)\n",
+				 __func__, region.name, region.start, region.end - 1);
+			free(region.name);
 			continue;
 		}
-		msg_gdbg("%s: verifying %s region (%#08x..%#08x)\n", __func__, region.name, region.start, region.end - 1);
+
+		if (region.read_prot) {
+			msg_gerr("%s: Verification imposible because %s region (%#08x..%#08x) is unreadable.\n",
+				 __func__, region.name, region.start, region.end - 1);
+			free(region.name);
+			goto out_free;
+		}
+
+		msg_gdbg("%s: Verifying %s region (%#08x..%#08x)\n",
+			 __func__, region.name, region.start, region.end - 1);
 		free(region.name);
 
-		unsigned int read_len = min(start + len, region.end) - i;
+		ret = read_flash(flash, readbuf, addr, read_len);
+		if (ret) {
+			msg_gerr("Verification impossible because read failed "
+				 "at 0x%x (len 0x%x)\n", start, len);
+			ret = -1;
+			goto out_free;
+		}
 
-		ret = read_flash(flash, readbuf, i, read_len);
+		ret = compare_range(cmpbuf + (addr - start), readbuf, addr, read_len);
 		if (ret)
 			goto out_free;
 
-		ret = compare_range(cmpbuf + (i - start), readbuf, i, read_len);
-		if (ret)
-			goto out_free;
-
-		i += read_len;
 	}
 
 out_free:
