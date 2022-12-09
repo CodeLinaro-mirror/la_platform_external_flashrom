@@ -407,6 +407,23 @@ static void get_flash_region(const struct flashctx *flash, int addr, struct flas
 	}
 }
 
+static int check_for_unwritable_regions(const struct flashctx *flash, unsigned int start, unsigned int len)
+{
+	struct flash_region region;
+	for (unsigned int addr = start; addr < start + len; addr = region.end) {
+		get_flash_region(flash, addr, &region);
+
+		if (region.write_prot) {
+			msg_gerr("%s: cannot write/erase inside %s region (%#08x..%#08x).\n",
+				 __func__, region.name, region.start, region.end - 1);
+			free(region.name);
+			return -1;
+		}
+		free(region.name);
+	}
+	return 0;
+}
+
 /* special unit-test hook */
 erasefunc_t *g_test_erase_injector;
 
@@ -1003,36 +1020,42 @@ static write_func_t *lookup_write_func_ptr(const struct flashchip *chip)
 static int write_flash(struct flashctx *flash, const uint8_t *buf,
 		       unsigned int start, unsigned int len)
 {
-	unsigned int addr = start;
-	while (addr < start + len) {
+	if (!flash->flags.skip_unwritable_regions) {
+		if (check_for_unwritable_regions(flash, start, len))
+			return -1;
+	}
+
+	unsigned int write_len;
+	for (unsigned int addr = start; addr < start + len; addr += write_len) {
 		struct flash_region region;
 		get_flash_region(flash, addr, &region);
 
-		unsigned int write_len = min(start + len, region.end) - addr;
+		write_len = min(start + len, region.end) - addr;
 		const uint8_t *rbuf = buf + addr - start;
 
 		if (region.write_prot) {
 			msg_gdbg("%s: cannot write inside %s region (%#08x..%#08x), skipping (%#08x..%#08x).\n",
 				 __func__, region.name, region.start, region.end - 1, addr, addr + write_len - 1);
 			free(region.name);
-		} else {
-			msg_gdbg("%s: %s region (%#08x..%#08x) is writable, writing range (%#08x..%#08x).\n",
-				 __func__, region.name, addr, addr + write_len - 1, region.start, region.end - 1);
-			free(region.name);
-
-			write_func_t *write_func = lookup_write_func_ptr(flash->chip);
-			int ret = write_func(flash, rbuf, addr, write_len);
-			if (ret == SPI_ACCESS_DENIED) {
-				/* TODO(quasisec):/ This branch should be unreachable, remove. */
-				msg_gdbg("BUG: ignoring error when writing 0x%x-0x%x\n", addr, addr + write_len - 1);
-				ret = 0;
-			} else if (ret) {
-				msg_gdbg("%s: failed to write (%#08x..%#08x).\n", __func__, addr, addr + write_len - 1);
-				return -1;
-			}
+			continue;
 		}
 
-		addr += write_len;
+		msg_gdbg("%s: %s region (%#08x..%#08x) is writable, writing range (%#08x..%#08x).\n",
+			 __func__, region.name, region.start, region.end - 1, addr, addr + write_len - 1);
+
+		write_func_t *write_func = lookup_write_func_ptr(flash->chip);
+		int ret = write_func(flash, rbuf, addr, write_len);
+		if (ret == SPI_ACCESS_DENIED) {
+			/* TODO(quasisec):/ This branch should be unreachable, remove. */
+			msg_gdbg("BUG: ignoring error when writing 0x%x-0x%x\n", addr, addr + write_len - 1);
+			ret = 0;
+		} else if (ret) {
+			msg_gerr("%s: failed to write (%#08x..%#08x).\n", __func__, addr, addr + write_len - 1);
+			free(region.name);
+			return -1;
+		}
+
+		free(region.name);
 	}
 
 	return 0;
