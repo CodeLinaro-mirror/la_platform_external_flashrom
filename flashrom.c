@@ -1399,10 +1399,7 @@ static int walk_eraseregions(struct flashctx *flash,
 			erasefunc_t *erase_func = lookup_erase_func_ptr(eraser);
 			rc = per_blockfn(flash, &info, erase_func);
 			if (rc) {
-				if (rc == SPI_ACCESS_DENIED) /* from cros_ec erase path. */
-					rc = 0;
-				else
-					return rc;
+				return rc;
 			}
 
 			base += pu->block_size;
@@ -1449,10 +1446,7 @@ static int erase_and_write_block_helper(struct flashctx *const flash,
 
 		ret = erasefn(flash, info->erase_start, erase_len);
 		if (ret) {
-			if (ret == SPI_ACCESS_DENIED) /* from cros_ec erase path. */
-				msg_cdbg(" DENIED");
-			else
-				msg_cerr(" ERASE_FAILED\n");
+			msg_cerr(" ERASE_FAILED\n");
 			return ret;
 		}
 
