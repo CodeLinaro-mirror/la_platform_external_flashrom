@@ -57,13 +57,6 @@ struct programmer_entry {
 	} devs;
 
 	int (*init) (const struct programmer_cfg *cfg);
-
-	/*
-	 * If set, use extra precautions such as erasing with small block sizes
-	 * and verifying more rigorously. This will incur a performance penalty
-	 * but is good for programming the ROM in-system on a live machine.
-	 */
-	int paranoid;
 };
 
 extern const struct programmer_entry *const programmer_table[];

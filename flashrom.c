@@ -1467,7 +1467,6 @@ static int erase_and_write_block_helper(struct flashctx *const flash,
 	const unsigned int erase_len = info->erase_end + 1 - info->erase_start;
 	unsigned int starthere = 0, lenhere = 0;
 	int ret = 0, writecount = 0;
-	int block_was_erased = 0;
 	enum write_granularity gran = flash->chip->gran;
 	bool skipped = true;
 	msg_cdbg(":");
@@ -1497,8 +1496,7 @@ static int erase_and_write_block_helper(struct flashctx *const flash,
 				msg_cerr(" ERASE_FAILED\n");
 			return ret;
 		}
-
-		if (programmer->paranoid) {
+		if (flash->flags.verify_after_write) { /* FIXME(b/263909055): replace with upstream. */
 			if (check_erased_range(flash, info->erase_start, erase_len)) {
 				msg_cerr(" ERASE_FAILED\n");
 				return -1;
@@ -1508,7 +1506,6 @@ static int erase_and_write_block_helper(struct flashctx *const flash,
 		/* Erase was successful. Adjust curcontents. */
 		memset(info->curcontents, ERASED_VALUE(flash), erase_len);
 		skipped = false;
-		block_was_erased = 1;
 	}
 	/* get_next_write() sets starthere to a new value after the call. */
 	while ((lenhere = get_next_write(info->curcontents + starthere,
@@ -1523,19 +1520,6 @@ static int erase_and_write_block_helper(struct flashctx *const flash,
 				   info->erase_start + starthere, lenhere);
 		if (ret) {
 			return ret;
-		}
-
-		/*
-		 * If the block needed to be erased and was erased successfully
-		 * then we can assume that we didn't run into any write-
-		 * protected areas. Otherwise, we need to verify each page to
-		 * ensure it was successfully written and abort if we encounter
-		 * any errors.
-		 */
-		if (programmer->paranoid && !block_was_erased) {
-			if (verify_range(flash, info->newcontents + starthere,
-					info->erase_start + starthere, lenhere))
-				return -1;
 		}
 
 		starthere += lenhere;

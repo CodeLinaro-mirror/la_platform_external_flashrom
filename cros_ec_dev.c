@@ -600,11 +600,4 @@ const struct programmer_entry programmer_cros_ec = {
 	.type			= OTHER,
 	.devs.note		= "Google EC.\n",
 	.init			= cros_ec_init,
-
-	/*
-	 * "ec" implies in-system programming on a live system, so
-	 * handle with paranoia to catch errors early. If something goes
-	 * wrong then hopefully the system will still be recoverable.
-	 */
-	.paranoid		= 1,
 };
