@@ -40,6 +40,8 @@
 #include "power.h"
 #include "big_lock.h"
 
+static bool use_legacy_erase_path = true;
+
 const char flashrom_version[] = FLASHROM_VERSION;
 
 #ifndef USE_BIG_LOCK
@@ -1650,10 +1652,17 @@ _free_ret:
  * @return 0 on success,
  *	   1 if all available erase functions failed.
  */
-static int erase_by_layout(struct flashctx *const flashctx)
+static int erase_by_layout_legacy(struct flashctx *const flashctx)
 {
 	struct walk_info info = { 0 };
 	return walk_by_layout(flashctx, &info, &erase_block);
+}
+
+static int erase_by_layout(struct flashctx *const flashctx)
+{
+	if (use_legacy_erase_path)
+		return erase_by_layout_legacy(flashctx);
+	return 1; /* unimplemented. */
 }
 
 static int read_erase_write_block(struct flashctx *const flashctx,
@@ -1763,7 +1772,7 @@ _free_ret:
  * @return 0 on success,
  *	   1 if anything has gone wrong.
  */
-static int write_by_layout(struct flashctx *const flashctx,
+static int write_by_layout_legacy(struct flashctx *const flashctx,
 			   void *const curcontents, const void *const newcontents)
 {
 	struct walk_info info;
@@ -1937,6 +1946,14 @@ static int erase_and_write_flash(struct flashctx *flash,
 
 	free(descriptor);
 	return ret;
+}
+
+static int write_by_layout(struct flashctx *const flashctx,
+			   uint8_t *const curcontents, const uint8_t *const newcontents)
+{
+	if (use_legacy_erase_path)
+		return write_by_layout_legacy(flashctx, curcontents, newcontents);
+	return 1; /* unimplemented. */
 }
 
 /**
