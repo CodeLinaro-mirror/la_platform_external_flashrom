@@ -62,7 +62,6 @@ int cros_ec_fd;		/* File descriptor for kernel device */
 static const char *ec_type[] = {
 	"ec",
 	"pd",
-	"sh",
 	"fp",
 	"tp",
 };
