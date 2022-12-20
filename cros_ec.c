@@ -586,7 +586,7 @@ int cros_ec_block_erase(struct flashctx *flash, unsigned int blockaddr,
 			in_current_image(blockaddr, len)) {
 		cros_ec_invalidate_copy(blockaddr, len);
 		need_2nd_pass = 1;
-		return 0; //ignore SPI_ACCESS_DENIED;
+		return SPI_ACCESS_DENIED;
 	}
 
 	erase.params.offset = blockaddr;
@@ -606,7 +606,7 @@ int cros_ec_block_erase(struct flashctx *flash, unsigned int blockaddr,
 			// this is active image.
 			cros_ec_invalidate_copy(blockaddr, len);
 			need_2nd_pass = 1;
-			return 0; //ignore SPI_ACCESS_DENIED;
+			return SPI_ACCESS_DENIED;
 		}
 		if (rc < 0) {
 			msg_perr("CROS_EC: Flash erase error at address 0x%x, rc=%d\n",
@@ -630,7 +630,7 @@ int cros_ec_block_erase(struct flashctx *flash, unsigned int blockaddr,
 		// this is active image.
 		cros_ec_invalidate_copy(blockaddr, len);
 		need_2nd_pass = 1;
-		return 0; //ignore SPI_ACCESS_DENIED;
+		return SPI_ACCESS_DENIED;
 	case -EC_RES_BUSY:
 		msg_perr("CROS_EC: Flash erase command "
 				" already in progress\n");
