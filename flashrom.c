@@ -1947,10 +1947,19 @@ static int setup_curcontents(struct flashctx *flashctx, void *curcontents,
 static void combine_image_by_layout(const struct flashctx *const flashctx,
 				    uint8_t *const newcontents, const uint8_t *const oldcontents);
 
-int flashrom_flash_erase(struct flashctx *const flashctx)
+/**
+ * @brief Erases the included layout regions.
+ *
+ * If there is no layout set in the given flash context, the whole chip will
+ * be erased.
+ *
+ * @param flashctx Flash context to be used.
+ * @return 0 on success,
+ *	   1 if all available erase functions failed.
+ */
+static int erase_by_layout(struct flashctx *const flashctx)
 {
 	const size_t flash_size = flashctx->chip->total_size * 1024;
-
 	int ret = 1;
 
 	uint8_t *curcontents = malloc(flash_size);
@@ -1960,22 +1969,29 @@ int flashrom_flash_erase(struct flashctx *const flashctx)
 		goto _free_ret;
 	}
 
-	if (prepare_flash_access(flashctx, false, false, true, false))
-		goto _free_ret;
-
 	if (setup_curcontents(flashctx, curcontents, NULL))
-		goto _finalize_ret;
+		goto _free_ret;
 
 	memset(newcontents, ERASED_VALUE(flashctx), flash_size);
 	combine_image_by_layout(flashctx, newcontents, curcontents);
 
 	ret = erase_and_write_flash(flashctx, curcontents, newcontents);
 
-_finalize_ret:
-	finalize_flash_access(flashctx);
 _free_ret:
 	free(curcontents);
 	free(newcontents);
+	return ret;
+}
+
+int flashrom_flash_erase(struct flashctx *const flashctx)
+{
+	if (prepare_flash_access(flashctx, false, false, true, false))
+		return 1;
+
+	const int ret = erase_by_layout(flashctx);
+
+	finalize_flash_access(flashctx);
+
 	return ret;
 }
 
