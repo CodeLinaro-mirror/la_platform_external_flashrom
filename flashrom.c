@@ -1514,32 +1514,42 @@ static int erase_and_write_block_helper(struct flashctx *const flash,
 		all_skipped = false;
 		msg_cdbg(" E");
 
-		unsigned int addr = info->erase_start;
-		while (addr < info->erase_start + erase_len) {
+		if (!flash->flags.skip_unwritable_regions) {
+			if (check_for_unwritable_regions(flash, info->erase_start, erase_len))
+				return -1;
+		}
+
+		unsigned int len;
+		for (unsigned int addr = info->erase_start; addr < info->erase_start + erase_len; addr += len) {
 			struct flash_region region;
 			get_flash_region(flash, addr, &region);
-			free(region.name);
+
+			len = min(info->erase_start + erase_len, region.end) - addr;
 
 			if (region.write_prot) {
-				msg_cdbg(" DENIED");
-				return 0;
+				msg_gdbg("%s: cannot erase inside %s region (%#08x..%#08x), skipping range (%#08x..%#08x).\n",
+					 __func__, region.name, region.start, region.end - 1, addr, addr + len - 1);
+				free(region.name);
+				continue;
 			}
 
-			addr = region.end;
-		}
+			msg_gdbg("%s: %s region (%#08x..%#08x) is writable, erasing range (%#08x..%#08x).\n",
+				 __func__, region.name, region.start, region.end - 1, addr, addr + len - 1);
+			free(region.name);
 
-		ret = erasefn(flash, info->erase_start, erase_len);
-		if (ret) {
-			if (ret == SPI_ACCESS_DENIED) /* from cros_ec erase path. */
-				msg_cdbg(" DENIED");
-			else
-				msg_cerr(" ERASE_FAILED\n");
-			return ret;
-		}
-		if (flash->flags.verify_after_write) { /* FIXME(b/263909055): replace with upstream. */
-			if (check_erased_range(flash, info->erase_start, erase_len)) {
-				msg_cerr(" ERASE_FAILED\n");
-				return -1;
+			ret = erasefn(flash, addr, len);
+			if (ret) {
+				if (ret == SPI_ACCESS_DENIED) /* from cros_ec erase path. */
+					msg_cdbg(" DENIED");
+				else
+					msg_cerr(" ERASE_FAILED\n");
+				return ret;
+			}
+			if (flash->flags.verify_after_write) { /* FIXME(b/263909055): replace with upstream. */
+				if (check_erased_range(flash, info->erase_start, erase_len)) {
+					msg_cerr(" ERASE_FAILED\n");
+					return -1;
+				}
 			}
 		}
 
