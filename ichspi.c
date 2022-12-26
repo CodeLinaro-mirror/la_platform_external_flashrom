@@ -268,7 +268,7 @@ enum ich_access_protection {
 static bool ichspi_lock = false;
 
 enum ich_chipset ich_generation = CHIPSET_ICH_UNKNOWN;
-static uint32_t ichspi_bbar = 0;
+static uint32_t ichspi_bbar;
 
 static void *ich_spibar = NULL;
 
