@@ -28,7 +28,6 @@
 #include "spi.h"
 #include "ich_descriptors.h"
 #include "action_descriptor.h"
-#include "chipdrivers.h"
 
 /* Apollo Lake */
 #define APL_REG_FREG12		0xe0	/* 32 Bytes Flash Region 12 */
@@ -1608,8 +1607,6 @@ static void ich_hwseq_get_flash_id(struct flashctx *flash, enum ich_chipset ich_
 	/* Support writeprotect */
 	flash->chip->reg_bits = entry->reg_bits;
 	flash->chip->decode_range = entry->decode_range;
-	/* FIXME(b/236660711): remove unlock funciton */
-	flash->chip->unlock = &opaque_disable_blockprotect;
 }
 
 static int ich_hwseq_probe(struct flashctx *flash)

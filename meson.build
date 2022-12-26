@@ -95,7 +95,6 @@ srcs += files(
   'cros_ec_wp.c',
   'big_lock.c',
   'file_lock.c',
-  'opaque_statusreg.c',
 )
 cargs += '-DCONFIG_CROS_ALIAS=1'
 cargs += '-DCONFIG_CROS_EC=1'
