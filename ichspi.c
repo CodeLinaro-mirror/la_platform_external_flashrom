@@ -1992,7 +1992,7 @@ static const struct spi_master spi_master_ich9 = {
 	.get_region	= ich_get_region,
 };
 
-static struct opaque_master opaque_master_ich_hwseq = {
+static const struct opaque_master opaque_master_ich_hwseq = {
 	.max_data_read	= 64,
 	.max_data_write	= 64,
 	.probe		= ich_hwseq_probe,
