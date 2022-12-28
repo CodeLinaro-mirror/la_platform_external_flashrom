@@ -413,18 +413,40 @@ static int disable_soft_wp_if_needed(struct flashctx *flash)
 	return 0;
 }
 
+static void parse_fmap(const uint8_t *const image, uint32_t flash_size)
+{
+	// Parse the fmap in the image file and cache the firmware ranges.
+	struct fmap *fmap = NULL;
+	if (fmap_read_from_buffer(&fmap, image, flash_size)) {
+		return;
+	}
+
+	// Lookup RO/A/B sections in FMAP.
+	for (unsigned int i = 0; i < fmap->nareas; i++) {
+		const struct fmap_area *fa = &fmap->areas[i];
+
+		for (unsigned int j = EC_IMAGE_RO; j < ARRAY_SIZE(sections); j++) {
+			if (strcmp(sections[j], (const char *) fa->name))
+				continue;
+
+			msg_pdbg("Found '%s' in image.\n", fa->name);
+			fwcopy[j] = *fa;
+			fwcopy[j].flags = 1;  // mark as new
+		}
+	}
+	free(fmap);
+}
+
 /*
  * Prepare EC for update:
  * - Disable soft WP if needed.
  * - Parse flashmap.
  * - Jump to RO firmware.
  */
-int cros_ec_prepare(struct flashctx *flash, uint8_t *image, int size)
+int cros_ec_prepare(struct flashctx *flash, const uint8_t *const image, uint32_t flash_size)
 {
-	struct fmap *fmap = NULL;
-	unsigned i, j;
-
-	if (!(cros_ec_priv && cros_ec_priv->detected)) return 0;
+	if (!(cros_ec_priv && cros_ec_priv->detected))
+		return 0;
 
 	if (ec_check_features(EC_FEATURE_RWSIG) > 0) {
 		rwsig_enabled = 1;
@@ -434,33 +456,19 @@ int cros_ec_prepare(struct flashctx *flash, uint8_t *image, int size)
 	if (disable_soft_wp_if_needed(flash))
 		return 1;
 
-	// Parse the fmap in the image file and cache the firmware ranges.
-	if (!fmap_read_from_buffer(&fmap, image, size)) {
-		// Lookup RO/A/B sections in FMAP.
-		for (i = 0; i < fmap->nareas; i++) {
-			struct fmap_area *fa = &fmap->areas[i];
-			for (j = EC_IMAGE_RO; j < ARRAY_SIZE(sections); j++) {
-				if (!strcmp(sections[j],
-						(const char *)fa->name)) {
-					msg_pdbg("Found '%s' in image.\n",
-						fa->name);
-					memcpy(&fwcopy[j], fa, sizeof(*fa));
-					fwcopy[j].flags = 1;  // mark as new
-				}
-			}
-		}
-		free(fmap);
-	}
+	parse_fmap(image, flash_size);
 
-	if (ec_check_features(EC_FEATURE_EXEC_IN_RAM) > 0) {
-		msg_pwarn("Skip jumping to RO\n");
-		return 0;
+	if (ec_check_features(EC_FEATURE_EXEC_IN_RAM) <= 0) {
+		/* Warning: before update, we jump the EC to RO copy. If you
+		 * want to change this behavior, please also check the
+		 * cros_ec_finish().
+		 */
+		msg_pwarn("EXEC_IN_RAM unsupported - jumping to RO\n");
+		return cros_ec_jump_copy(EC_IMAGE_RO);
 	}
-	/* Warning: before update, we jump the EC to RO copy. If you
-	 * want to change this behavior, please also check the
-	 * cros_ec_finish().
-	 */
-	return cros_ec_jump_copy(EC_IMAGE_RO);
+	msg_pwarn("EXEC_IN_RAM supported - skip jumping to RO\n");
+
+	return 0;
 }
 
 

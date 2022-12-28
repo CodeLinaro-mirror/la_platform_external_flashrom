@@ -491,7 +491,7 @@ typedef int fdtype;
  */
 int cros_ec_need_2nd_pass(void);
 int cros_ec_finish(void);
-int cros_ec_prepare(struct flashctx *flash, uint8_t *image, int size);
+int cros_ec_prepare(struct flashctx *flash, const uint8_t *const image, uint32_t flash_size);
 
 void sp_flush_incoming(void);
 fdtype sp_openserport(char *dev, int baud);
