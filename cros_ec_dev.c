@@ -557,7 +557,7 @@ int programming_ec(void)
 	return ec_alias_path;
 }
 
-int cros_ec_probe_dev(const struct programmer_cfg *cfg)
+static int cros_ec_init(const struct programmer_cfg *cfg)
 {
 	char dev_path[32];
 
@@ -600,7 +600,7 @@ const struct programmer_entry programmer_cros_ec = {
 	.name			= "ec",
 	.type			= OTHER,
 	.devs.note		= "Google EC.\n",
-	.init			= cros_ec_probe_dev,
+	.init			= cros_ec_init,
 
 	/*
 	 * "ec" implies in-system programming on a live system, so

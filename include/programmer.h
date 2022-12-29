@@ -496,7 +496,6 @@ typedef int fdtype;
  *
  * @return 0 if found correct, non-zero if not found or error
  */
-int cros_ec_probe_dev(const struct programmer_cfg *cfg);
 int cros_ec_need_2nd_pass(void);
 int cros_ec_finish(void);
 int cros_ec_prepare(struct flashctx *flash, uint8_t *image, int size);
