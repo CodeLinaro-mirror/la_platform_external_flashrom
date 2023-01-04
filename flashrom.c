@@ -1653,6 +1653,122 @@ static int erase_by_layout(struct flashctx *const flashctx)
 	return walk_by_layout(flashctx, &info, &erase_block);
 }
 
+static int read_erase_write_block(struct flashctx *const flashctx,
+				  const struct walk_info *const info, const erasefn_t erasefn)
+{
+	const chipsize_t erase_len = info->erase_end + 1 - info->erase_start;
+	const bool region_unaligned = info->region_start > info->erase_start ||
+				      info->erase_end > info->region_end;
+	const uint8_t *newcontents = NULL;
+	int ret = 2;
+
+	/*
+	 * If the region is not erase-block aligned, merge current flash con-
+	 * tents into `info->curcontents` and a new buffer `newc`. The former
+	 * is necessary since we have no guarantee that the full erase block
+	 * was already read into `info->curcontents`. For the latter a new
+	 * buffer is used since `info->newcontents` might contain data for
+	 * other unaligned regions that touch this erase block too.
+	 */
+	if (region_unaligned) {
+		msg_cdbg("R");
+		uint8_t *const newc = malloc(erase_len);
+		if (!newc) {
+			msg_cerr("Out of memory!\n");
+			return 1;
+		}
+		memcpy(newc, info->newcontents + info->erase_start, erase_len);
+
+		/* Merge data preceding the current region. */
+		if (info->region_start > info->erase_start) {
+			const chipoff_t start	= info->erase_start;
+			const chipsize_t len	= info->region_start - info->erase_start;
+			if (read_flash(flashctx, newc, start, len)) {
+				msg_cerr("Can't read! Aborting.\n");
+				goto _free_ret;
+			}
+			memcpy(info->curcontents + start, newc, len);
+		}
+		/* Merge data following the current region. */
+		if (info->erase_end > info->region_end) {
+			const chipoff_t start     = info->region_end + 1;
+			const chipoff_t rel_start = start - info->erase_start; /* within this erase block */
+			const chipsize_t len      = info->erase_end - info->region_end;
+			if (read_flash(flashctx, newc + rel_start, start, len)) {
+				msg_cerr("Can't read! Aborting.\n");
+				goto _free_ret;
+			}
+			memcpy(info->curcontents + start, newc + rel_start, len);
+		}
+
+		newcontents = newc;
+	} else {
+		newcontents = info->newcontents + info->erase_start;
+	}
+
+	ret = 1;
+	bool skipped = true;
+	uint8_t *const curcontents = info->curcontents + info->erase_start;
+	const uint8_t erased_value = ERASED_VALUE(flashctx);
+	if (!(flashctx->chip->feature_bits & FEATURE_NO_ERASE) &&
+			need_erase(curcontents, newcontents, erase_len, flashctx->chip->gran, erased_value)) {
+		if (erase_block(flashctx, info, erasefn))
+			goto _free_ret;
+		/* Erase was successful. Adjust curcontents. */
+		memset(curcontents, erased_value, erase_len);
+		skipped = false;
+	}
+
+	unsigned int starthere = 0, lenhere = 0, writecount = 0;
+	/* get_next_write() sets starthere to a new value after the call. */
+	while ((lenhere = get_next_write(curcontents + starthere, newcontents + starthere,
+					 erase_len - starthere, &starthere, flashctx->chip->gran))) {
+		if (!writecount++)
+			msg_cdbg("W");
+		/* Needs the partial write function signature. */
+		if (write_flash(flashctx, newcontents + starthere,
+					  info->erase_start + starthere, lenhere))
+			goto _free_ret;
+		starthere += lenhere;
+		skipped = false;
+	}
+	if (skipped)
+		msg_cdbg("S");
+	else
+		all_skipped = false;
+
+	/* Update curcontents, other regions with overlapping erase blocks
+	   might rely on this. */
+	memcpy(curcontents, newcontents, erase_len);
+	ret = 0;
+
+_free_ret:
+	if (region_unaligned)
+		free((void *)newcontents);
+	return ret;
+}
+
+/**
+ * @brief Writes the included layout regions from a given image.
+ *
+ * If there is no layout set in the given flash context, the whole image
+ * will be written.
+ *
+ * @param flashctx    Flash context to be used.
+ * @param curcontents A buffer of full chip size with current chip contents of included regions.
+ * @param newcontents The new image to be written.
+ * @return 0 on success,
+ *	   1 if anything has gone wrong.
+ */
+static int write_by_layout(struct flashctx *const flashctx,
+			   void *const curcontents, const void *const newcontents)
+{
+	struct walk_info info;
+	info.curcontents = curcontents;
+	info.newcontents = newcontents;
+	return walk_by_layout(flashctx, &info, read_erase_write_block);
+}
+
 /*
  * Function to process processing units accumulated in the action descriptor.
  *
@@ -2303,6 +2419,8 @@ static void combine_image_by_layout(const struct flashctx *const flashctx,
 	memcpy(newcontents + start, oldcontents + start, copy_len);
 }
 
+static bool g_use_upstream_erasewrite_path = false;
+
 int flashrom_image_write(struct flashctx *const flashctx, void *const buffer, const size_t buffer_len,
                          const void *const refbuffer)
 {
@@ -2357,7 +2475,11 @@ int flashrom_image_write(struct flashctx *const flashctx, void *const buffer, co
 		goto _finalize_ret;
 	}
 
-	if (erase_and_write_flash(flashctx, curcontents, newcontents)) {
+	if (g_use_upstream_erasewrite_path)
+		ret = write_by_layout(flashctx, curcontents, newcontents);
+	else
+		ret = erase_and_write_flash(flashctx, curcontents, newcontents);
+	if (ret) {
 		msg_cerr("Uh oh. Erase/write failed. ");
 		ret = 2;
 		if (verify_all) {
@@ -2396,7 +2518,11 @@ int flashrom_image_write(struct flashctx *const flashctx, void *const buffer, co
 		}
 
 		// write 2nd pass
-		if (erase_and_write_flash(flashctx, curcontents, newcontents)) {
+		if (g_use_upstream_erasewrite_path)
+			ret = write_by_layout(flashctx, curcontents, newcontents);
+		else
+			ret = erase_and_write_flash(flashctx, curcontents, newcontents);
+		if (ret) {
 			msg_cerr("Uh oh. CROS_EC 2nd pass failed.\n");
 			ret = 2;
 			emergency_help_message();
