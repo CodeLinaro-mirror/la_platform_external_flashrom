@@ -1429,10 +1429,229 @@ typedef int (*erasefn_t)(struct flashctx *, unsigned int addr, unsigned int len)
 struct walk_info {
 	uint8_t *curcontents;
 	const uint8_t *newcontents;
+	chipoff_t region_start;
+	chipoff_t region_end;
 	chipoff_t erase_start;
 	chipoff_t erase_end;
 };
+/* returns 0 on success, 1 to retry with another erase function, 2 for immediate abort */
 typedef int (*per_blockfn_t)(struct flashctx *, const struct walk_info *, erasefn_t);
+
+static int walk_eraseblocks(struct flashctx *const flashctx,
+			    struct walk_info *const info,
+			    const size_t erasefunction, const per_blockfn_t per_blockfn)
+{
+	int ret;
+	size_t i, j;
+	bool first = true;
+	struct block_eraser *const eraser = &flashctx->chip->block_erasers[erasefunction];
+
+	info->erase_start = 0;
+	for (i = 0; i < NUM_ERASEREGIONS; ++i) {
+		/* count==0 for all automatically initialized array
+		   members so the loop below won't be executed for them. */
+		for (j = 0; j < eraser->eraseblocks[i].count; ++j, info->erase_start = info->erase_end + 1) {
+			info->erase_end = info->erase_start + eraser->eraseblocks[i].size - 1;
+
+			/* Skip any eraseblock that is completely outside the current region. */
+			if (info->erase_end < info->region_start)
+				continue;
+			if (info->region_end < info->erase_start)
+				break;
+
+			/* Print this for every block except the first one. */
+			if (first)
+				first = false;
+			else
+				msg_cdbg(", ");
+			msg_cdbg("0x%06x-0x%06x:", info->erase_start, info->erase_end);
+
+			erasefunc_t *erase_func = lookup_erase_func_ptr(eraser);
+			ret = per_blockfn(flashctx, info, erase_func);
+			if (ret)
+				return ret;
+		}
+		if (info->region_end < info->erase_start)
+			break;
+	}
+	msg_cdbg("\n");
+	return 0;
+}
+
+static int walk_by_layout(struct flashctx *const flashctx, struct walk_info *const info,
+			  const per_blockfn_t per_blockfn)
+{
+	const struct flashrom_layout *const layout = get_layout(flashctx);
+	const struct romentry *entry = NULL;
+
+	all_skipped = true;
+	msg_cinfo("Erasing and writing flash chip... ");
+
+	while ((entry = layout_next_included(layout, entry))) {
+		const struct flash_region *region = &entry->region;
+		info->region_start = region->start;
+		info->region_end   = region->end;
+
+		size_t j;
+		int error = 1; /* retry as long as it's 1 */
+		for (j = 0; j < NUM_ERASEFUNCTIONS; ++j) {
+			if (j != 0)
+				msg_cinfo("Looking for another erase function.\n");
+			msg_cdbg("Trying erase function %zi... ", j);
+			if (check_block_eraser(flashctx, j, 1))
+				continue;
+
+			error = walk_eraseblocks(flashctx, info, j, per_blockfn);
+			if (error != 1)
+				break;
+
+			if (info->curcontents) {
+				msg_cinfo("Reading current flash chip contents... ");
+				if (read_by_layout(flashctx, info->curcontents, false)) {
+					/* Now we are truly screwed. Read failed as well. */
+					msg_cerr("Can't read anymore! Aborting.\n");
+					/* We have no idea about the flash chip contents, so
+					   retrying with another erase function is pointless. */
+					error = 2;
+					break;
+				}
+				msg_cinfo("done. ");
+			}
+		}
+		if (error == 1)
+			msg_cinfo("No usable erase functions left.\n");
+		if (error) {
+			msg_cerr("FAILED!\n");
+			return 1;
+		}
+	}
+	if (all_skipped)
+		msg_cinfo("\nWarning: Chip content is identical to the requested image.\n");
+	msg_cinfo("Erase/write done.\n");
+	return 0;
+}
+
+static int erase_block(struct flashctx *const flashctx,
+		       const struct walk_info *const info, const erasefn_t erasefn)
+{
+	const unsigned int erase_len = info->erase_end + 1 - info->erase_start;
+	const bool region_unaligned = info->region_start > info->erase_start ||
+				      info->erase_end > info->region_end;
+	uint8_t *backup_contents = NULL, *erased_contents = NULL;
+	int ret = 2;
+
+	/*
+	 * If the region is not erase-block aligned, merge current flash con-
+	 * tents into a new buffer `backup_contents`.
+	 */
+	if (region_unaligned) {
+		backup_contents = malloc(erase_len);
+		erased_contents = malloc(erase_len);
+		if (!backup_contents || !erased_contents) {
+			msg_cerr("Out of memory!\n");
+			ret = 1;
+			goto _free_ret;
+		}
+		memset(backup_contents, ERASED_VALUE(flashctx), erase_len);
+		memset(erased_contents, ERASED_VALUE(flashctx), erase_len);
+
+		msg_cdbg("R");
+		/* Merge data preceding the current region. */
+		if (info->region_start > info->erase_start) {
+			const chipoff_t start	= info->erase_start;
+			const chipsize_t len	= info->region_start - info->erase_start;
+			if (read_flash(flashctx, backup_contents, start, len)) {
+				msg_cerr("Can't read! Aborting.\n");
+				goto _free_ret;
+			}
+		}
+		/* Merge data following the current region. */
+		if (info->erase_end > info->region_end) {
+			const chipoff_t start     = info->region_end + 1;
+			const chipoff_t rel_start = start - info->erase_start; /* within this erase block */
+			const chipsize_t len      = info->erase_end - info->region_end;
+			if (read_flash(flashctx, backup_contents + rel_start, start, len)) {
+				msg_cerr("Can't read! Aborting.\n");
+				goto _free_ret;
+			}
+		}
+	}
+
+	ret = 1;
+	all_skipped = false;
+
+	msg_cdbg("E");
+
+	if (!flashctx->flags.skip_unwritable_regions) {
+		if (check_for_unwritable_regions(flashctx, info->erase_start, erase_len))
+			goto _free_ret;
+	}
+
+	unsigned int len;
+	for (unsigned int addr = info->erase_start; addr < info->erase_start + erase_len; addr += len) {
+		struct flash_region region;
+		get_flash_region(flashctx, addr, &region);
+
+		len = min(info->erase_start + erase_len, region.end) - addr;
+
+		if (region.write_prot) {
+			msg_gdbg("%s: cannot erase inside %s region (%#08x..%#08x), skipping range (%#08x..%#08x).\n",
+				 __func__, region.name, region.start, region.end - 1, addr, addr + len - 1);
+			free(region.name);
+			continue;
+		}
+
+		msg_gdbg("%s: %s region (%#08x..%#08x) is writable, erasing range (%#08x..%#08x).\n",
+			 __func__, region.name, region.start, region.end - 1, addr, addr + len - 1);
+		free(region.name);
+
+		if (erasefn(flashctx, addr, len))
+			goto _free_ret;
+		if (check_erased_range(flashctx, addr, len)) {
+			msg_cerr("ERASE FAILED!\n");
+			goto _free_ret;
+		}
+	}
+
+
+	if (region_unaligned) {
+		unsigned int starthere = 0, lenhere = 0, writecount = 0;
+		/* get_next_write() sets starthere to a new value after the call. */
+		while ((lenhere = get_next_write(erased_contents + starthere, backup_contents + starthere,
+						 erase_len - starthere, &starthere, flashctx->chip->gran))) {
+			if (!writecount++)
+				msg_cdbg("W");
+			/* Needs the partial write function signature. */
+			if (write_flash(flashctx, backup_contents + starthere,
+						  info->erase_start + starthere, lenhere))
+				goto _free_ret;
+			starthere += lenhere;
+		}
+	}
+
+	ret = 0;
+
+_free_ret:
+	free(erased_contents);
+	free(backup_contents);
+	return ret;
+}
+
+/**
+ * @brief Erases the included layout regions.
+ *
+ * If there is no layout set in the given flash context, the whole chip will
+ * be erased.
+ *
+ * @param flashctx Flash context to be used.
+ * @return 0 on success,
+ *	   1 if all available erase functions failed.
+ */
+static int erase_by_layout(struct flashctx *const flashctx)
+{
+	struct walk_info info = { 0 };
+	return walk_by_layout(flashctx, &info, &erase_block);
+}
 
 /*
  * Function to process processing units accumulated in the action descriptor.
@@ -1991,7 +2210,7 @@ static void combine_image_by_layout(const struct flashctx *const flashctx,
  * @return 0 on success,
  *	   1 if all available erase functions failed.
  */
-static int erase_by_layout(struct flashctx *const flashctx)
+static int erase_by_layout_downstream(struct flashctx *const flashctx)
 {
 	const size_t flash_size = flashctx->chip->total_size * 1024;
 	int ret = 1;
@@ -2016,13 +2235,18 @@ _free_ret:
 	free(newcontents);
 	return ret;
 }
+static bool g_use_upstream_erase_path = false;
 
 int flashrom_flash_erase(struct flashctx *const flashctx)
 {
+	int ret;
 	if (prepare_flash_access(flashctx, false, false, true, false))
 		return 1;
 
-	const int ret = erase_by_layout(flashctx);
+	if (g_use_upstream_erase_path)
+		ret = erase_by_layout(flashctx);
+	else
+		ret = erase_by_layout_downstream(flashctx);
 
 	finalize_flash_access(flashctx);
 
