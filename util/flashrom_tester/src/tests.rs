@@ -283,14 +283,14 @@ fn partial_lock_test(section: LayoutNames) -> impl Fn(&mut TestEnv) -> TestResul
         env.wp.set_hw(true)?;
 
         // Check that we cannot write to the protected region.
-        let rws = flashrom::ROMWriteSpecifics {
-            layout_file: Some(&env.layout_file),
-            write_file: Some(env.random_data_file()),
-            name_file: Some(wp_section_name),
-        };
-        if env.cmd.write_file_with_layout(&rws).is_ok() {
-            info!(
-                "Section should be locked but flashrom write returned Ok. This may be incorrect; verifying"
+        if env
+            .cmd
+            .write_from_file_region(env.random_data_file(), wp_section_name, &env.layout_file)
+            .is_ok()
+        {
+            return Err(
+                "Section should be locked, should not have been overwritable with random data"
+                    .into(),
             );
         }
         if !env.is_golden() {
@@ -300,12 +300,11 @@ fn partial_lock_test(section: LayoutNames) -> impl Fn(&mut TestEnv) -> TestResul
         // Check that we can write to the non protected region.
         let (non_wp_section_name, _, _) =
             utils::layout_section(env.layout(), section.get_non_overlapping_section());
-        let rws = flashrom::ROMWriteSpecifics {
-            layout_file: Some(&env.layout_file),
-            write_file: Some(env.random_data_file()),
-            name_file: Some(non_wp_section_name),
-        };
-        env.cmd.write_file_with_layout(&rws)?;
+        env.cmd.write_from_file_region(
+            env.random_data_file(),
+            non_wp_section_name,
+            &env.layout_file,
+        )?;
 
         Ok(())
     }
