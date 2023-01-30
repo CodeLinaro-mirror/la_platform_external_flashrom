@@ -1861,6 +1861,40 @@ static const char *const access_names[] = {
 	"read-write", "write-only", "read-only", "locked"
 };
 
+#define EMBEDDED_CONTROLLER_REGION	8
+
+static enum ich_access_protection ec_region_rwperms(unsigned int i)
+{
+	/*
+	 * Use Flash Descriptor Observe register to determine if
+	 * the EC region can be written by the BIOS master.
+	 */
+	int rwperms = NO_PROT;
+
+	struct ich_descriptors desc;
+	memset(&desc, 0, sizeof(desc));
+
+	/* Region is RW if flash descriptor override is set */
+	uint16_t freg = REGREAD16(ICH9_REG_HSFS);
+	if ((freg & HSFS_FDV) && !(freg & HSFS_FDOPSS)) {
+		rwperms = NO_PROT;
+	} else if (read_ich_descriptors_via_fdo(ich_generation, ich_spibar, &desc) == ICH_RET_OK) {
+		const struct ich_desc_master *const mstr = &desc.master;
+		int bios_ec_r = mstr->mstr[i].read  & BIT(16); /* BIOS_EC_r in PCH100+ */
+		int bios_ec_w = mstr->mstr[i].write & BIT(28); /* BIOS_EC_w in PCH100+ */
+		if (bios_ec_r && bios_ec_w)
+			rwperms = NO_PROT;
+		else if (bios_ec_r && !bios_ec_w)
+			rwperms = WRITE_PROT;
+		else if (!bios_ec_r && bios_ec_w)
+			rwperms = READ_PROT;
+		else
+			rwperms = LOCKED;
+	}
+
+	return rwperms;
+}
+
 static enum ich_access_protection ich9_handle_frap(uint32_t frap, unsigned int i)
 {
 	static const char *const region_names[] = {
@@ -1892,6 +1926,8 @@ static enum ich_access_protection ich9_handle_frap(uint32_t frap, unsigned int i
 		rwperms_idx = (((ICH_BRWA(frap) >> i) & 1) << 1) |
 			      (((ICH_BRRA(frap) >> i) & 1) << 0);
 		rwperms = access_perms_to_protection[rwperms_idx];
+	} else if (i == EMBEDDED_CONTROLLER_REGION && ich_generation >= CHIPSET_100_SERIES_SUNRISE_POINT) {
+		rwperms = ec_region_rwperms(i);
 	} else {
 		/* Datasheets don't define any access bits for regions > 7. We
 		   can't rely on the actual descriptor settings either as there
