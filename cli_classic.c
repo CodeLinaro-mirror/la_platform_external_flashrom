@@ -1247,6 +1247,16 @@ int main(int argc, char *argv[])
 		goto out_shutdown;
 	}
 
+	/*
+	 * FIXME: Align with upstream, maybe add build flag for this. Always
+	 * skip unreadable and unwritable regions in cros flashrom.  Various
+	 * flashrom users (e.g. Tast tests, flashrom_tester) try to read or
+	 * write the entire flash and will fail on Intel platforms if the ME
+	 * regions are not automatically skipped.
+	 */
+	flashrom_flag_set(fill_flash, FLASHROM_FLAG_SKIP_UNWRITABLE_REGIONS, true);
+	flashrom_flag_set(fill_flash, FLASHROM_FLAG_SKIP_UNREADABLE_REGIONS, true);
+
 	if (ifd && (flashrom_layout_read_from_ifd(&layout, fill_flash, NULL, 0) ||
 			   process_include_args(layout, include_args))) {
 		ret = 1;
@@ -1301,15 +1311,6 @@ int main(int argc, char *argv[])
 #endif
 	flashrom_flag_set(fill_flash, FLASHROM_FLAG_VERIFY_AFTER_WRITE, !dont_verify_it);
 	flashrom_flag_set(fill_flash, FLASHROM_FLAG_VERIFY_WHOLE_CHIP, !dont_verify_all);
-	/*
-	 * FIXME: Align with upstream, maybe add build flag for this. Always
-	 * skip unreadable and unwritable regions in cros flashrom.  Various
-	 * flashrom users (e.g. Tast tests, flashrom_tester) try to read or
-	 * write the entire flash and will fail on Intel platforms if the ME
-	 * regions are not automatically skipped.
-	 */
-	flashrom_flag_set(fill_flash, FLASHROM_FLAG_SKIP_UNWRITABLE_REGIONS, true);
-	flashrom_flag_set(fill_flash, FLASHROM_FLAG_SKIP_UNREADABLE_REGIONS, true);
 
 	/* FIXME: We should issue an unconditional chip reset here. This can be
 	 * done once we have a .reset function in struct flashchip.
