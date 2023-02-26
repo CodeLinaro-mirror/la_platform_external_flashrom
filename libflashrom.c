@@ -251,6 +251,21 @@ size_t flashrom_flash_getsize(const struct flashrom_flashctx *const flashctx)
 	return flashctx->chip->total_size * 1024;
 }
 
+void flashrom_flash_getinfo(const struct flashrom_flashctx *const flashctx, struct flashrom_flashchip_info *info)
+{
+	if (!info) return;
+
+	info->vendor = flashctx->chip->vendor;
+	info->name = flashctx->chip->name;
+
+	info->total_size = flashctx->chip->total_size;
+
+	info->tested.erase = (enum flashrom_test_state) flashctx->chip->tested.erase;
+	info->tested.probe = (enum flashrom_test_state) flashctx->chip->tested.probe;
+	info->tested.read  = (enum flashrom_test_state) flashctx->chip->tested.read;
+	info->tested.write = (enum flashrom_test_state) flashctx->chip->tested.write;
+}
+
 void flashrom_flash_release(struct flashrom_flashctx *const flashctx)
 {
 	if (!flashctx)
