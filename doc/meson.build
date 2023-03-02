@@ -23,7 +23,7 @@ if sphinx.found()
     )
   endif
 
-  if get_option('documentation').auto() or get_option('documtation').enabled()
+  if get_option('documentation').auto() or get_option('documentation').enabled()
     custom_target(
       'documentation',
       command : [sphinx, '-b', 'html', '-q', '-d', '@PRIVATE_DIR@', '@CURRENT_SOURCE_DIR@', '@OUTDIR@/html'],
