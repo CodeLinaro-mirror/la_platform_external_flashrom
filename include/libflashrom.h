@@ -115,6 +115,8 @@ enum flashrom_test_state {
 struct flashrom_flashchip_info {
 	const char *vendor;
 	const char *name;
+	uint32_t manufacture_id;
+	uint32_t model_id;
 	unsigned int total_size;
 	struct flashrom_tested {
 		enum flashrom_test_state probe;

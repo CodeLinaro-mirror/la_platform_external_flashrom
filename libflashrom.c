@@ -102,6 +102,8 @@ struct flashrom_flashchip_info *flashrom_supported_flash_chips(void)
 	for (unsigned int i = 0; i < flashchips_size; ++i) {
 		supported_flashchips[i].vendor = flashchips[i].vendor;
 		supported_flashchips[i].name = flashchips[i].name;
+		supported_flashchips[i].manufacture_id = flashchips[i].manufacture_id;
+		supported_flashchips[i].model_id = flashchips[i].model_id;
 		supported_flashchips[i].tested.erase =
 			(enum flashrom_test_state)flashchips[i].tested.erase;
 		supported_flashchips[i].tested.probe =
@@ -257,6 +259,8 @@ void flashrom_flash_getinfo(const struct flashrom_flashctx *const flashctx, stru
 
 	info->vendor = flashctx->chip->vendor;
 	info->name = flashctx->chip->name;
+	info->manufacture_id = flashctx->chip->manufacture_id;
+	info->model_id = flashctx->chip->model_id;
 
 	info->total_size = flashctx->chip->total_size;
 
