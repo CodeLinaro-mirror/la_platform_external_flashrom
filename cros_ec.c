@@ -551,12 +551,9 @@ int cros_ec_read(struct flashctx *flash, uint8_t *readarr,
  */
 static int in_current_image(unsigned int addr, unsigned int len)
 {
-	uint32_t region_offset;
-	uint32_t region_size;
-
-	enum ec_current_image image = cros_ec_priv->current_image;
-	region_offset = cros_ec_priv->region[image].offset;
-	region_size = cros_ec_priv->region[image].size;
+	const enum ec_current_image image = cros_ec_priv->current_image;
+	const uint32_t region_offset = cros_ec_priv->region[image].offset;
+	const uint32_t region_size = cros_ec_priv->region[image].size;
 
 	if ((addr + len - 1 < region_offset) ||
 		(addr > region_offset + region_size - 1)) {
