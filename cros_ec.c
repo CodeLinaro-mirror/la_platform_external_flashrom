@@ -212,11 +212,7 @@ static int ec_get_cmd_versions(int cmd, uint32_t *pmask)
  */
 int cros_ec_cold_reboot(int flags)
 {
-	struct ec_params_reboot_ec p;
-
-	memset(&p, 0, sizeof(p));
-	p.cmd = EC_REBOOT_COLD;
-	p.flags = flags;
+	struct ec_params_reboot_ec p = { .cmd = EC_REBOOT_COLD, .flags = flags };
 	return cros_ec_priv->ec_command(EC_CMD_REBOOT_EC, 0, &p, sizeof(p),
 					NULL, 0);
 }
@@ -240,8 +236,7 @@ static int cros_ec_jump_copy(enum ec_current_image target)
 	if (current_image == target)
 		return 0;
 
-	struct ec_params_reboot_ec p;
-	memset(&p, 0, sizeof(p));
+	struct ec_params_reboot_ec p = {0};
 
 	/* Translate target --> EC reboot command parameter */
 	switch (target) {
@@ -332,10 +327,9 @@ static int cros_ec_restore_wp(void *data)
 
 static int cros_ec_wp_is_enabled(void)
 {
-	struct ec_params_flash_protect p;
+	struct ec_params_flash_protect p = {0};
 	struct ec_response_flash_protect r;
 
-	memset(&p, 0, sizeof(p));
 	int rc = cros_ec_priv->ec_command(EC_CMD_FLASH_PROTECT,
 			EC_VER_FLASH_PROTECT, &p, sizeof(p), &r, sizeof(r));
 	if (rc < 0) {
