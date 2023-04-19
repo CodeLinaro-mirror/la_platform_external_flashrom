@@ -91,9 +91,7 @@ static struct ec_response_flash_region_info regions[EC_FLASH_REGION_COUNT];
  */
 static void cros_ec_invalidate_copy(unsigned int addr, unsigned int len)
 {
-	unsigned i;
-
-	for (i = EC_IMAGE_RO; i < ARRAY_SIZE(fwcopy); i++) {
+	for (unsigned int i = EC_IMAGE_RO; i < ARRAY_SIZE(fwcopy); i++) {
 		struct fmap_area *fw = &fwcopy[i];
 		if ((addr >= fw->offset && (addr < fw->offset + fw->size)) ||
 		    (fw->offset >= addr && (fw->offset < addr + len))) {
@@ -107,9 +105,8 @@ static void cros_ec_invalidate_copy(unsigned int addr, unsigned int len)
 static int cros_ec_get_current_image(void)
 {
 	struct ec_response_get_version resp;
-	int rc;
 
-	rc = cros_ec_priv->ec_command(EC_CMD_GET_VERSION,
+	int rc = cros_ec_priv->ec_command(EC_CMD_GET_VERSION,
 				0, NULL, 0, &resp, sizeof(resp));
 	if (rc < 0) {
 		msg_perr("CROS_EC cannot get the running copy: rc=%d\n", rc);
@@ -127,12 +124,10 @@ static int cros_ec_get_current_image(void)
 int cros_ec_get_region_info(enum ec_flash_region region,
 			       struct ec_response_flash_region_info *info)
 {
-	struct ec_params_flash_region_info req;
+	struct ec_params_flash_region_info req = { .region = region };
 	struct ec_response_flash_region_info resp;
-	int rc;
 
-	req.region = region;
-	rc = cros_ec_priv->ec_command(EC_CMD_FLASH_REGION_INFO,
+	int rc = cros_ec_priv->ec_command(EC_CMD_FLASH_REGION_INFO,
 			      EC_VER_FLASH_REGION_INFO, &req, sizeof(req),
 			      &resp, sizeof(resp));
 	if (rc < 0) {
@@ -181,9 +176,7 @@ static int ec_check_features(int feature)
  */
 static int ec_rwsig_abort()
 {
-	struct ec_params_rwsig_action p;
-
-	p.action = RWSIG_ACTION_ABORT;
+	struct ec_params_rwsig_action p = { .action = RWSIG_ACTION_ABORT };
 	return cros_ec_priv->ec_command(EC_CMD_RWSIG_ACTION,
 				0, &p, sizeof(p), NULL, 0);
 }
@@ -198,16 +191,13 @@ static int ec_rwsig_abort()
  */
 static int ec_get_cmd_versions(int cmd, uint32_t *pmask)
 {
-	struct ec_params_get_cmd_versions pver;
+	struct ec_params_get_cmd_versions pver = { .cmd = cmd };
 	struct ec_response_get_cmd_versions rver;
-	int rc;
 
 	*pmask = 0;
 
-	pver.cmd = cmd;
-	rc = cros_ec_priv->ec_command(EC_CMD_GET_CMD_VERSIONS, 0,
+	int rc = cros_ec_priv->ec_command(EC_CMD_GET_CMD_VERSIONS, 0,
 			&pver, sizeof(pver), &rver, sizeof(rver));
-
 	if (rc < 0)
 		return rc;
 
@@ -239,21 +229,18 @@ int cros_ec_cold_reboot(int flags)
  */
 static int cros_ec_jump_copy(enum ec_current_image target)
 {
-	struct ec_params_reboot_ec p;
-	int rc;
-	enum ec_current_image current_image;
-
 	/* Since the EC may return EC_RES_SUCCESS twice if the EC doesn't
 	 * jump to different firmware copy. The second EC_RES_SUCCESS would
 	 * set the OBF=1 and the next command cannot be executed.
 	 * Thus, we call EC to jump only if the target is different.
 	 */
-	current_image = cros_ec_get_current_image();
+	const enum ec_current_image current_image = cros_ec_get_current_image();
 	if (current_image < 0)
 		return 1;
 	if (current_image == target)
 		return 0;
 
+	struct ec_params_reboot_ec p;
 	memset(&p, 0, sizeof(p));
 
 	/* Translate target --> EC reboot command parameter */
@@ -302,7 +289,7 @@ static int cros_ec_jump_copy(enum ec_current_image target)
 		return 0;
 	}
 
-	rc = cros_ec_priv->ec_command(EC_CMD_REBOOT_EC,
+	int rc = cros_ec_priv->ec_command(EC_CMD_REBOOT_EC,
 				      0, &p, sizeof(p), NULL, 0);
 	if (rc < 0) {
 		msg_perr("CROS_EC cannot jump/reboot to [%s]:%d\n",
@@ -347,10 +334,9 @@ static int cros_ec_wp_is_enabled(void)
 {
 	struct ec_params_flash_protect p;
 	struct ec_response_flash_protect r;
-	int rc;
 
 	memset(&p, 0, sizeof(p));
-	rc = cros_ec_priv->ec_command(EC_CMD_FLASH_PROTECT,
+	int rc = cros_ec_priv->ec_command(EC_CMD_FLASH_PROTECT,
 			EC_VER_FLASH_PROTECT, &p, sizeof(p), &r, sizeof(r));
 	if (rc < 0) {
 		msg_perr("FAILED: Cannot get the write protection status: %d\n",
@@ -383,7 +369,7 @@ static int cros_ec_wp_is_enabled(void)
  */
 static int disable_soft_wp_if_needed(struct flashctx *flash)
 {
-	int wp_status = cros_ec_wp_is_enabled();
+	const int wp_status = cros_ec_wp_is_enabled();
 	if (wp_status < 0) {
 		return 1;
 	} else if (wp_status == 1) {
@@ -520,10 +506,8 @@ int cros_ec_finish(void)
 	 * EC_FLASH_PROTECT_ALL_NOW and make sure RWSIG check is performed.
 	 */
 	if (rwsig_enabled) {
-		int rc;
-
 		msg_pdbg("RWSIG enabled: doing a cold reboot to enable WP.\n");
-		rc = cros_ec_cold_reboot(0);
+		int rc = cros_ec_cold_reboot(0);
 		usleep(EC_RWSIG_JUMP_TO_RW_DELAY);
 		return rc;
 	}
@@ -537,7 +521,7 @@ int cros_ec_read(struct flashctx *flash, uint8_t *readarr,
 {
 	int rc = 0;
 	struct ec_params_flash_read p;
-	int maxlen = flash->mst->opaque.max_data_read;
+	const int maxlen = flash->mst->opaque.max_data_read;
 	uint8_t buf[maxlen];
 	unsigned offset = 0, count;
 
@@ -573,11 +557,10 @@ int cros_ec_read(struct flashctx *flash, uint8_t *readarr,
  */
 static int in_current_image(unsigned int addr, unsigned int len)
 {
-	enum ec_current_image image;
 	uint32_t region_offset;
 	uint32_t region_size;
 
-	image = cros_ec_priv->current_image;
+	enum ec_current_image image = cros_ec_priv->current_image;
 	region_offset = cros_ec_priv->region[image].offset;
 	region_size = cros_ec_priv->region[image].size;
 
@@ -592,10 +575,6 @@ static int in_current_image(unsigned int addr, unsigned int len)
 int cros_ec_block_erase(struct flashctx *flash, unsigned int blockaddr,
                         unsigned int len)
 {
-	struct ec_params_flash_erase_v1 erase;
-	uint32_t mask;
-	int rc, cmd_version, timeout=0;
-
 	if (ec_check_features(EC_FEATURE_EXEC_IN_RAM) <= 0 &&
 			in_current_image(blockaddr, len)) {
 		cros_ec_invalidate_copy(blockaddr, len);
@@ -603,14 +582,16 @@ int cros_ec_block_erase(struct flashctx *flash, unsigned int blockaddr,
 		return SPI_ACCESS_DENIED;
 	}
 
+	struct ec_params_flash_erase_v1 erase;
 	erase.params.offset = blockaddr;
 	erase.params.size = len;
-	rc = ec_get_cmd_versions(EC_CMD_FLASH_ERASE, &mask);
+	uint32_t mask;
+	int rc = ec_get_cmd_versions(EC_CMD_FLASH_ERASE, &mask);
 	if (rc < 0) {
 		msg_perr("Cannot determine erase command version\n");
 		return 0;
 	}
-	cmd_version = 31 - __builtin_clz(mask);
+	int cmd_version = 31 - __builtin_clz(mask);
 
 	if (cmd_version == 0) {
 		rc = cros_ec_priv->ec_command(EC_CMD_FLASH_ERASE, 0,
@@ -663,6 +644,7 @@ int cros_ec_block_erase(struct flashctx *flash, unsigned int blockaddr,
 /* wait .5 second between queries. */
 #define CROS_EC_ERASE_ASYNC_WAIT 500000
 
+	int timeout = 0;
 	while (rc < 0 && timeout < CROS_EC_ERASE_ASYNC_TIMEOUT) {
 		usleep(CROS_EC_ERASE_ASYNC_WAIT);
 		timeout += CROS_EC_ERASE_ASYNC_WAIT;
@@ -691,11 +673,9 @@ end_flash_erase:
 int cros_ec_write(struct flashctx *flash, const uint8_t *buf, unsigned int addr,
                   unsigned int nbytes)
 {
-	unsigned i;
 	int rc = 0;
 	unsigned int written = 0, real_write_size;
 	struct ec_params_flash_write p;
-	uint8_t *packet;
 
 	/*
 	 * For b:35542013, to workaround the undersized
@@ -706,11 +686,11 @@ int cros_ec_write(struct flashctx *flash, const uint8_t *buf, unsigned int addr,
 			      cros_ec_priv->ideal_write_size);
 	assert(real_write_size > 0);
 
-	packet = malloc(sizeof(p) + real_write_size);
+	uint8_t *packet = malloc(sizeof(p) + real_write_size);
 	if (!packet)
 		return -1;
 
-	for (i = 0; i < nbytes; i += written) {
+	for (unsigned int i = 0; i < nbytes; i += written) {
 		written = min(nbytes - i, real_write_size);
 		p.offset = addr + i;
 		p.size = written;
@@ -744,13 +724,7 @@ int cros_ec_write(struct flashctx *flash, const uint8_t *buf, unsigned int addr,
 
 int cros_ec_probe_size(struct flashctx *flash)
 {
-	int rc = 0, cmd_version;
-	struct ec_response_flash_spi_info spi_info;
-	struct ec_response_get_chip_info chip_info;
-	struct block_eraser *eraser;
-	uint32_t mask;
-
-	rc = cros_ec_get_current_image();
+	int rc = cros_ec_get_current_image();
 	if (rc < 0) {
 		msg_perr("%s(): Failed to probe (no current image): %d\n",
 			 __func__, rc);
@@ -759,14 +733,15 @@ int cros_ec_probe_size(struct flashctx *flash)
 	cros_ec_priv->current_image = rc;
 	cros_ec_priv->region = &regions[0];
 
+	uint32_t mask;
 	rc = ec_get_cmd_versions(EC_CMD_FLASH_INFO, &mask);
 	if (rc < 0) {
 		msg_perr("Cannot determine write command version\n");
 		return 0;
 	}
-	cmd_version = 31 - __builtin_clz(mask);
+	int cmd_version = 31 - __builtin_clz(mask);
 
-	eraser = &flash->chip->block_erasers[0];
+	struct block_eraser *eraser = &flash->chip->block_erasers[0];
 	flash->chip->page_size = flash->mst->opaque.max_data_read;
 
 	if (cmd_version < 2) {
@@ -870,6 +845,7 @@ int cros_ec_probe_size(struct flashctx *flash)
 	 * FIXME: This info will eventually be exposed via some EC command.
 	 * See chrome-os-partner:20973.
 	 */
+	struct ec_response_get_chip_info chip_info;
 	rc = cros_ec_priv->ec_command(EC_CMD_GET_CHIP_INFO,
 			0, NULL, 0, &chip_info, sizeof(chip_info));
 	if (rc < 0) {
@@ -881,6 +857,7 @@ int cros_ec_probe_size(struct flashctx *flash)
 
 
 
+	struct ec_response_flash_spi_info spi_info;
 	rc = cros_ec_priv->ec_command(EC_CMD_FLASH_SPI_INFO,
 				0, NULL, 0, &spi_info, sizeof(spi_info));
 	if (rc < 0) {
