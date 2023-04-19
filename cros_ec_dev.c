@@ -430,6 +430,7 @@ static int cros_ec_parse_param(const struct programmer_cfg *cfg,
 		priv->dev = ec_type[index];
 		if (!strcmp(priv->dev, "fp"))
 			msg_perr("\t\033[31;1;5;7m >> The fp subtype is deprecated! Remove call site NOW as this WILL be deleted! <<\033[0m\n");
+		priv->subtype = index;
 		msg_pdbg("Target %s used\n", priv->dev);
 	}
 	free(p);
@@ -515,6 +516,7 @@ static struct cros_ec_priv cros_ec_dev_priv = {
 	.region = NULL,
 	.ec_command = cros_ec_command_dev,
 	.dev = "ec",
+	.subtype = 0,
 	.ideal_write_size = 0,
 	.erase_block_size = 0,
 	.max_response_size = 0

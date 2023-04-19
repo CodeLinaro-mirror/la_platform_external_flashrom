@@ -40,6 +40,9 @@ struct cros_ec_priv {
 	 */
 	const char* dev;
 
+	/* technical debt to deal with non-EC components (pd, tp, fp). */
+	uint8_t subtype;
+
 	/*
 	 * Some CrOS ECs support page write mode for their flash memory. This
 	 * represents the ideal size of a data payload to write to flash.

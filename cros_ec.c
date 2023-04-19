@@ -406,6 +406,7 @@ static void parse_fmap(const uint8_t *const image, uint32_t flash_size)
 		const struct fmap_area *fa = &fmap->areas[i];
 
 		for (unsigned int j = EC_IMAGE_RO; j < ARRAY_SIZE(sections); j++) {
+			/* skip fmap sections unrelated to cros_ec sections. */
 			if (strcmp(sections[j], (const char *) fa->name))
 				continue;
 
@@ -415,6 +416,30 @@ static void parse_fmap(const uint8_t *const image, uint32_t flash_size)
 		}
 	}
 	free(fmap);
+}
+
+/**
+ * iff layout region is one of the supported cros_ec
+ * sections then modify the region_type bit-feild.
+ * 00 - no RO or RW.
+ * 01 - RO found.
+ * 10 - RW found.
+ * 11 - RO+RW found.
+ */
+static enum ec_current_image parse_layout(const struct flashrom_layout *const layout)
+{
+	enum ec_current_image region_type = EC_IMAGE_UNKNOWN; /* no RO or RW found yet. */
+	const struct romentry *entry = NULL;
+
+	while ((entry = layout_next_included(layout, entry))) {
+		const struct flash_region *region = &entry->region;
+		if (!strcmp("WP_RO", (const char *) region->name))
+			region_type |= EC_IMAGE_RO;
+		if (!strcmp(sections[EC_IMAGE_RW], (const char *) region->name))
+			region_type |= EC_IMAGE_RW;
+	}
+	/* iff neither RO or RW was found in the layout then assume a full image of both. */
+	return region_type == EC_IMAGE_UNKNOWN ? (EC_IMAGE_RO | EC_IMAGE_RW) : region_type;
 }
 
 /*
@@ -437,13 +462,33 @@ int cros_ec_prepare(struct flashctx *flash, const uint8_t *const image, uint32_t
 		return 1;
 
 	parse_fmap(image, flash_size);
+	/* check layout to determine what sysjumps we are required to do. */
+	const struct flashrom_layout *const layout = get_layout(flash);
+	const enum ec_current_image region_typ = parse_layout(layout);
+	const uint8_t ec_subtype = cros_ec_priv->subtype; /* non-zero denotes non-ec path. */
 
 	if (ec_check_features(EC_FEATURE_EXEC_IN_RAM) <= 0) {
 		/* Warning: before update, we jump the EC to RO copy. If you
 		 * want to change this behavior, please also check the
 		 * cros_ec_finish().
 		 */
-		msg_pwarn("EXEC_IN_RAM unsupported - jumping to RO\n");
+		msg_pwarn("EXEC_IN_RAM unsupported..");
+
+		if (ec_subtype) {
+			msg_pwarn(" legacy component, unconditional jump to RO.\n");
+			return cros_ec_jump_copy(EC_IMAGE_RO);
+		}
+
+		if (!(region_typ & EC_IMAGE_RO) && cros_ec_get_current_image() == EC_IMAGE_RO) {
+			msg_pwarn(" image contains RW and already in RO, skipping jump.\n");
+			return 0;
+		}
+		if (!(region_typ & EC_IMAGE_RW) && cros_ec_get_current_image() == EC_IMAGE_RW) {
+			msg_pwarn(" image contains RO and already in RW, skipping jump.\n");
+			return 0;
+		}
+
+		msg_pwarn(" unconditional jump to RO.\n");
 		return cros_ec_jump_copy(EC_IMAGE_RO);
 	}
 	msg_pwarn("EXEC_IN_RAM supported - skip jumping to RO\n");
@@ -483,18 +528,22 @@ int cros_ec_need_2nd_pass(void)
 }
 
 
-/* Returns 0 for success.
- *
+/**
+ * Returns 0 for success.
  * Try latest firmware: B > A > RO
- *
- * This function assumes the EC jumps to RO at cros_ec_prepare() so that
- * the fwcopy[RO].flags is old (0) and A/B are new. Please also refine
- * this code logic if you change the cros_ec_prepare() behavior.
  */
 int cros_ec_finish(void)
 {
 	if (!(cros_ec_priv && cros_ec_priv->detected))
           return 0;
+
+	/*
+	 * Check that the EC had jumped to RO at cros_ec_prepare() so that
+	 * the fwcopy[RO].flags is old (0) and A/B are new otherwise return.
+	 */
+	const uint8_t ec_subtype = cros_ec_priv->subtype; /* non-zero denotes non-ec path. */
+	if (cros_ec_get_current_image() != EC_IMAGE_RO && !ec_subtype)
+		return 0;
 
 	/* For EC with RWSIG enabled. We need a cold reboot to enable
 	 * EC_FLASH_PROTECT_ALL_NOW and make sure RWSIG check is performed.
