@@ -127,7 +127,6 @@ static int command_wait_for_response(void)
 	struct ec_response_get_comms_status status;
 	struct cros_ec_command cmd;
 	int ret;
-	int i;
 
 	cmd.version = 0;
 	cmd.command = EC_CMD_GET_COMMS_STATUS;
@@ -139,7 +138,7 @@ static int command_wait_for_response(void)
 	/* FIXME: magic delay until we fix the underlying problem (probably in
 	   the kernel driver) */
 	usleep(10 * 1000);
-	for (i = 1; i <= CROS_EC_COMMAND_RETRIES; i++) {
+	for (int i = 1; i <= CROS_EC_COMMAND_RETRIES; i++) {
 		ret = ioctl(cros_ec_fd, CROS_EC_DEV_IOCXCMD, &cmd, sizeof(cmd));
 		if (ret < 0) {
 			msg_perr("%s(): CrOS EC command failed: %d, errno=%d\n",
@@ -188,7 +187,6 @@ static int __cros_ec_command_dev(int command, int version,
 			   void *indata, int insize)
 {
 	struct cros_ec_command cmd;
-	int ret;
 
 	cmd.version = version;
 	cmd.command = command;
@@ -196,7 +194,8 @@ static int __cros_ec_command_dev(int command, int version,
 	cmd.outsize = outsize;
 	cmd.indata = indata;
 	cmd.insize = insize;
-	ret = ioctl(cros_ec_fd, CROS_EC_DEV_IOCXCMD, &cmd, sizeof(cmd));
+
+	int ret = ioctl(cros_ec_fd, CROS_EC_DEV_IOCXCMD, &cmd, sizeof(cmd));
 	if (ret < 0 && errno == EAGAIN) {
 		ret = command_wait_for_response();
 		cmd.result = 0;
@@ -224,13 +223,9 @@ static int command_wait_for_response_v2(void)
 {
 	uint8_t s_cmd_buf[sizeof(struct cros_ec_command_v2) +
 			  sizeof(struct ec_response_get_comms_status)];
-	struct ec_response_get_comms_status *status;
-	struct cros_ec_command_v2 *s_cmd;
+	struct cros_ec_command_v2 *s_cmd = (struct cros_ec_command_v2 *)s_cmd_buf;
+	struct ec_response_get_comms_status *status = (struct ec_response_get_comms_status *)s_cmd->data;
 	int ret;
-	int i;
-
-	s_cmd = (struct cros_ec_command_v2 *)s_cmd_buf;
-	status = (struct ec_response_get_comms_status *)s_cmd->data;
 
 	s_cmd->version = 0;
 	s_cmd->command = EC_CMD_GET_COMMS_STATUS;
@@ -242,7 +237,7 @@ static int command_wait_for_response_v2(void)
 	 * the kernel driver)
 	 */
 	usleep(10 * 1000);
-	for (i = 1; i <= CROS_EC_COMMAND_RETRIES; i++) {
+	for (int i = 1; i <= CROS_EC_COMMAND_RETRIES; i++) {
 		ret = ioctl(cros_ec_fd, CROS_EC_DEV_IOCXCMD_V2, s_cmd_buf,
 			    sizeof(s_cmd_buf));
 		if (ret < 0) {
@@ -273,14 +268,12 @@ static int __cros_ec_command_dev_v2(int command, int version,
 			   const void *outdata, int outsize,
 			   void *indata, int insize)
 {
-	struct cros_ec_command_v2 *s_cmd;
-	int size = sizeof(struct cros_ec_command_v2) + max(outsize, insize);
-	int ret;
+	const size_t size = sizeof(struct cros_ec_command_v2) + max(outsize, insize);
 
 	assert(outsize == 0 || outdata != NULL);
 	assert(insize == 0 || indata != NULL);
 
-	s_cmd = malloc(size);
+	struct cros_ec_command_v2 *s_cmd = malloc(size);
 	if (s_cmd == NULL)
 		return -EC_RES_ERROR;
 
@@ -291,7 +284,7 @@ static int __cros_ec_command_dev_v2(int command, int version,
 	s_cmd->insize = insize;
 	memcpy(s_cmd->data, outdata, outsize);
 
-	ret = ioctl(cros_ec_fd, CROS_EC_DEV_IOCXCMD_V2, s_cmd, size);
+	int ret = ioctl(cros_ec_fd, CROS_EC_DEV_IOCXCMD_V2, s_cmd, size);
 	if (ret < 0 && errno == EAGAIN) {
 		ret = command_wait_for_response_v2();
 		s_cmd->result = 0;
@@ -326,7 +319,6 @@ static int ec_dev_is_v2()
 	};
 	struct ec_response_hello h_resp;
 	struct cros_ec_command s_cmd = { };
-	int r;
 
 	s_cmd.command = EC_CMD_HELLO;
 	s_cmd.result = 0xff;
@@ -335,7 +327,7 @@ static int ec_dev_is_v2()
 	s_cmd.insize = sizeof(h_resp);
 	s_cmd.indata = (uint8_t *)&h_resp;
 
-	r = ioctl(cros_ec_fd, CROS_EC_DEV_IOCXCMD, &s_cmd, sizeof(s_cmd));
+	int r = ioctl(cros_ec_fd, CROS_EC_DEV_IOCXCMD, &s_cmd, sizeof(s_cmd));
 	if (r < 0 && errno == ENOTTY)
 		return 1;
 
@@ -382,10 +374,9 @@ static int cros_ec_command_dev(int command, int version,
 static void cros_ec_set_max_size(struct cros_ec_priv *priv, struct opaque_master *op)
 {
 	struct ec_response_get_protocol_info info;
-	int rc = 0;
 
 	msg_pdbg("%s: sending protoinfo command\n", __func__);
-	rc = priv->ec_command(EC_CMD_GET_PROTOCOL_INFO, 0, NULL, 0,
+	int rc = priv->ec_command(EC_CMD_GET_PROTOCOL_INFO, 0, NULL, 0,
 			      &info, sizeof(info));
 	msg_pdbg("%s: rc:%d\n", __func__, rc);
 
@@ -498,13 +489,12 @@ static int cros_ec_test(struct cros_ec_priv *priv)
 {
 	struct ec_params_hello request;
 	struct ec_response_hello response;
-	int rc = 0;
 
 	/* Say hello to EC. */
 	request.in_data = 0xf0e0d0c0;  /* Expect EC will add on 0x01020304. */
 	msg_pdbg("%s: sending HELLO request with 0x%08x\n",
 	         __func__, request.in_data);
-	rc = priv->ec_command(EC_CMD_HELLO, 0, &request,
+	int rc = priv->ec_command(EC_CMD_HELLO, 0, &request,
 			     sizeof(request), &response, sizeof(response));
 	msg_pdbg("%s: response: 0x%08x\n", __func__, response.out_data);
 
