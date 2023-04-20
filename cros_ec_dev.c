@@ -61,7 +61,6 @@ int cros_ec_fd;		/* File descriptor for kernel device */
 /* The names of the different device that can be found in a machine. */
 static const char *ec_type[] = {
 	"ec",
-	"pd",
 	"fp",
 	"tp",
 };
