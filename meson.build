@@ -8,16 +8,8 @@ project('flashromutils', 'c',
     'werror=true',
     'optimization=s',
     'debug=false',
-    'default_library=both'
   ],
 )
-
-if get_option('classic_cli').enabled() and get_option('default_library') == 'shared'
-  error('''
-    Cannot build cli_classic with shared libflashrom. Use \'-Dclassic_cli=disabled\' to disable the cli,
-    or use \'--default-library=both\' to also build the classic_cli
-  ''')
-endif
 
 subdir('doc')
 
@@ -612,7 +604,7 @@ if host_machine.system() == 'darwin'
 else
   vflag = '-Wl,--version-script,@0@/@1@'.format(meson.current_source_dir(), mapfile)
 endif
-libflashrom = library(
+libflashrom = both_libraries(
   'flashrom',
   sources : [
     srcs,
@@ -649,7 +641,7 @@ pkgg.generate(
   description : 'library to interact with flashrom',
 )
 
-if get_option('classic_cli').enabled() or get_option('classic_cli').auto() and not get_option('default_library') == 'shared'
+if get_option('classic_cli').auto() or get_option('classic_cli').enabled()
   classic_cli = executable(
     'flashrom',
     files(
@@ -662,8 +654,7 @@ if get_option('classic_cli').enabled() or get_option('classic_cli').auto() and n
     install : true,
     install_dir : get_option('sbindir'),
     link_args : link_args,
-    # flashrom needs internal symbols of libflashrom
-    link_with : get_option('default_library') == 'static' ? libflashrom : libflashrom.get_static_lib(),
+    link_with : libflashrom.get_static_lib(), # flashrom needs internal symbols of libflashrom
   )
   if get_option('llvm_cov').enabled()
     run_target('llvm-cov-cli', command : ['scripts/llvm-cov', classic_cli])
