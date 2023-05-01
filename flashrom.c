@@ -41,7 +41,7 @@
 #include "power.h"
 #include "big_lock.h"
 
-static bool use_legacy_erase_path = true;
+static bool use_legacy_erase_path = false;
 
 const char flashrom_version[] = FLASHROM_VERSION;
 
