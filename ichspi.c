@@ -2152,6 +2152,7 @@ static void init_chipset_properties(struct swseq_data *swseq, struct hwseq_data 
 	case CHIPSET_400_SERIES_COMET_POINT:
 	case CHIPSET_500_SERIES_TIGER_POINT:
 	case CHIPSET_600_SERIES_ALDER_POINT:
+	case CHIPSET_700_SERIES_RAPTOR_POINT:
 	case CHIPSET_APOLLO_LAKE:
 	case CHIPSET_GEMINI_LAKE:
 	case CHIPSET_JASPER_LAKE:
@@ -2193,6 +2194,7 @@ static void init_chipset_properties(struct swseq_data *swseq, struct hwseq_data 
 	case CHIPSET_400_SERIES_COMET_POINT:
 	case CHIPSET_500_SERIES_TIGER_POINT:
 	case CHIPSET_600_SERIES_ALDER_POINT:
+	case CHIPSET_700_SERIES_RAPTOR_POINT:
 	case CHIPSET_APOLLO_LAKE:
 	case CHIPSET_GEMINI_LAKE:
 	case CHIPSET_JASPER_LAKE:
@@ -2256,6 +2258,7 @@ static int init_ich_default(const struct programmer_cfg *cfg, void *spibar, enum
 	case CHIPSET_400_SERIES_COMET_POINT:
 	case CHIPSET_500_SERIES_TIGER_POINT:
 	case CHIPSET_600_SERIES_ALDER_POINT:
+	case CHIPSET_700_SERIES_RAPTOR_POINT:
 	case CHIPSET_APOLLO_LAKE:
 	case CHIPSET_GEMINI_LAKE:
 	case CHIPSET_JASPER_LAKE:
@@ -2337,6 +2340,7 @@ static int init_ich_default(const struct programmer_cfg *cfg, void *spibar, enum
 		case CHIPSET_400_SERIES_COMET_POINT:
 		case CHIPSET_500_SERIES_TIGER_POINT:
 		case CHIPSET_600_SERIES_ALDER_POINT:
+		case CHIPSET_700_SERIES_RAPTOR_POINT:
 		case CHIPSET_APOLLO_LAKE:
 		case CHIPSET_GEMINI_LAKE:
 		case CHIPSET_JASPER_LAKE:
@@ -2378,6 +2382,7 @@ static int init_ich_default(const struct programmer_cfg *cfg, void *spibar, enum
 		case CHIPSET_400_SERIES_COMET_POINT:
 		case CHIPSET_500_SERIES_TIGER_POINT:
 		case CHIPSET_600_SERIES_ALDER_POINT:
+		case CHIPSET_700_SERIES_RAPTOR_POINT:
 		case CHIPSET_APOLLO_LAKE:
 		case CHIPSET_GEMINI_LAKE:
 		case CHIPSET_JASPER_LAKE:
@@ -2417,6 +2422,7 @@ static int init_ich_default(const struct programmer_cfg *cfg, void *spibar, enum
 	     ich_gen == CHIPSET_400_SERIES_COMET_POINT ||
 	     ich_gen == CHIPSET_500_SERIES_TIGER_POINT ||
 	     ich_gen == CHIPSET_600_SERIES_ALDER_POINT ||
+	     ich_gen == CHIPSET_700_SERIES_RAPTOR_POINT ||
 	     ich_gen == CHIPSET_C740_SERIES_EMMITSBURG)) {
 		msg_pdbg("Enabling hardware sequencing by default for 100+ series PCH.\n");
 		ich_spi_mode = ich_hwseq;
