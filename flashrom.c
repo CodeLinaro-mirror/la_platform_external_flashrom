@@ -2084,17 +2084,8 @@ static int verify_by_layout(
 			break;
 	}
 
-	if (ret) {
-		msg_gdbg("Could not fully verify due to error, ");
-		if (ret == SPI_ACCESS_DENIED) {
-			msg_gdbg("ignoring\n");
-			ret = 0;
-		} else {
-			msg_gdbg("aborting\n");
-			ret = 1;
-		}
-	}
-
+	if (ret)
+		msg_gerr("Could not fully verify due to error, aborting\n");
 	return ret;
 }
 
