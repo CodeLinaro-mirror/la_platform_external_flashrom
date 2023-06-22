@@ -643,11 +643,7 @@ int read_flash(struct flashctx *flash, uint8_t *buf, unsigned int start, unsigne
 
 		read_func_t *read_func = lookup_read_func_ptr(flash->chip);
 		int ret = read_func(flash, rbuf, addr, read_len);
-		if (ret == SPI_ACCESS_DENIED) {
-			/* TODO(quasisec):/ This branch should be unreachable, remove. */
-			msg_gdbg("BUG: ignoring error when reading 0x%x-0x%x\n", addr, addr + read_len - 1);
-			ret = 0;
-		} else if (ret) {
+		if (ret) {
 			msg_gerr("%s: failed to read (%#08x..%#08x).\n", __func__, addr, addr + read_len - 1);
 			return -1;
 		}
