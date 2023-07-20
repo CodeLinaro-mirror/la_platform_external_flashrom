@@ -739,7 +739,7 @@ int cros_ec_write(struct flashctx *flash, const uint8_t *buf, unsigned int addr,
 				in_current_image(p.offset, p.size)) {
 			cros_ec_invalidate_copy(addr, nbytes);
 			need_2nd_pass = 1;
-			return SPI_ACCESS_DENIED;
+			return 0; /* SPI access denied is ignored. */
 		}
 
 		memcpy(packet, &p, sizeof(p));
@@ -751,7 +751,7 @@ int cros_ec_write(struct flashctx *flash, const uint8_t *buf, unsigned int addr,
 			// this is active image.
 			cros_ec_invalidate_copy(addr, nbytes);
 			need_2nd_pass = 1;
-			return SPI_ACCESS_DENIED;
+			return 0; /* SPI access denied is ignored. */
 		}
 
 		if (rc < 0) break;

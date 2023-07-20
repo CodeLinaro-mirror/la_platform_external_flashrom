@@ -1078,11 +1078,7 @@ int write_flash(struct flashctx *flash, const uint8_t *buf,
 
 		write_func_t *write_func = lookup_write_func_ptr(flash->chip);
 		int ret = write_func(flash, rbuf, addr, write_len);
-		if (ret == SPI_ACCESS_DENIED) {
-			/* TODO(quasisec):/ This branch should be unreachable, remove. */
-			msg_gdbg("BUG: ignoring error when writing 0x%x-0x%x\n", addr, addr + write_len - 1);
-			ret = 0;
-		} else if (ret) {
+		if (ret) {
 			msg_gerr("%s: failed to write (%#08x..%#08x).\n", __func__, addr, addr + write_len - 1);
 			free(region.name);
 			return -1;
