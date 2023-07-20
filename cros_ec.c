@@ -55,6 +55,9 @@ struct cros_ec_priv *cros_ec_priv;
 /* 1 if we want the flashrom to call erase_and_write_flash() again. */
 static int need_2nd_pass = 0;
 
+/* true if cros_ec encounters spi_access denied during erasure. */
+static bool spi_acc_issue = false;
+
 /* 1 if EC firmware has RWSIG enabled. */
 static int rwsig_enabled = 0;
 
@@ -527,6 +530,10 @@ int cros_ec_need_2nd_pass(void)
 	return 1;
 }
 
+bool cros_ec_erasure_failed(void)
+{
+	return spi_acc_issue;
+}
 
 /**
  * Returns 0 for success.
@@ -615,11 +622,14 @@ static int in_current_image(unsigned int addr, unsigned int len)
 int cros_ec_block_erase(struct flashctx *flash, unsigned int blockaddr,
                         unsigned int len)
 {
+	spi_acc_issue = false; /* reset SPI access workaround singleton */
+
 	if (ec_check_features(EC_FEATURE_EXEC_IN_RAM) <= 0 &&
 			in_current_image(blockaddr, len)) {
 		cros_ec_invalidate_copy(blockaddr, len);
 		need_2nd_pass = 1;
-		return SPI_ACCESS_DENIED;
+		spi_acc_issue = true;
+		return 0; /* ignore SPI access denied, check spi_acc_issue. */
 	}
 
 	struct ec_params_flash_erase_v1 erase;
@@ -641,7 +651,8 @@ int cros_ec_block_erase(struct flashctx *flash, unsigned int blockaddr,
 			// this is active image.
 			cros_ec_invalidate_copy(blockaddr, len);
 			need_2nd_pass = 1;
-			return SPI_ACCESS_DENIED;
+			spi_acc_issue = true;
+			return 0; /* ignore SPI access denied, check spi_acc_issue. */
 		}
 		if (rc < 0) {
 			msg_perr("CROS_EC: Flash erase error at address 0x%x, rc=%d\n",
@@ -665,7 +676,8 @@ int cros_ec_block_erase(struct flashctx *flash, unsigned int blockaddr,
 		// this is active image.
 		cros_ec_invalidate_copy(blockaddr, len);
 		need_2nd_pass = 1;
-		return SPI_ACCESS_DENIED;
+		spi_acc_issue = true;
+		return 0; /* ignore SPI access denied, check spi_acc_issue. */
 	case -EC_RES_BUSY:
 		msg_perr("CROS_EC: Flash erase command "
 				" already in progress\n");

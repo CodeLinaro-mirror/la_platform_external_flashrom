@@ -490,6 +490,7 @@ typedef int fdtype;
  * @return 0 if found correct, non-zero if not found or error
  */
 int cros_ec_need_2nd_pass(void);
+bool cros_ec_erasure_failed(void);
 int cros_ec_finish(void);
 int cros_ec_prepare(struct flashctx *flash, const uint8_t *const image, uint32_t flash_size);
 
