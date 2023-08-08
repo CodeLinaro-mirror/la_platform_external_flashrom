@@ -138,7 +138,7 @@ static int command_wait_for_response(void)
 	   the kernel driver) */
 	usleep(10 * 1000);
 	for (int i = 1; i <= CROS_EC_COMMAND_RETRIES; i++) {
-		ret = ioctl(cros_ec_fd, CROS_EC_DEV_IOCXCMD, &cmd, sizeof(cmd));
+		ret = ioctl(cros_ec_fd, CROS_EC_DEV_IOCXCMD, &cmd);
 		if (ret < 0) {
 			msg_perr("%s(): CrOS EC command failed: %d, errno=%d\n",
 				 __func__, ret, errno);
@@ -194,7 +194,7 @@ static int __cros_ec_command_dev(int command, int version,
 	cmd.indata = indata;
 	cmd.insize = insize;
 
-	int ret = ioctl(cros_ec_fd, CROS_EC_DEV_IOCXCMD, &cmd, sizeof(cmd));
+	int ret = ioctl(cros_ec_fd, CROS_EC_DEV_IOCXCMD, &cmd);
 	if (ret < 0 && errno == EAGAIN) {
 		ret = command_wait_for_response();
 		cmd.result = 0;
@@ -237,8 +237,7 @@ static int command_wait_for_response_v2(void)
 	 */
 	usleep(10 * 1000);
 	for (int i = 1; i <= CROS_EC_COMMAND_RETRIES; i++) {
-		ret = ioctl(cros_ec_fd, CROS_EC_DEV_IOCXCMD_V2, s_cmd_buf,
-			    sizeof(s_cmd_buf));
+		ret = ioctl(cros_ec_fd, CROS_EC_DEV_IOCXCMD_V2, s_cmd_buf);
 		if (ret < 0) {
 			msg_perr("%s(): CrOS EC command failed: %d, errno=%d\n",
 				 __func__, ret, errno);
@@ -326,7 +325,7 @@ static int ec_dev_is_v2()
 	s_cmd.insize = sizeof(h_resp);
 	s_cmd.indata = (uint8_t *)&h_resp;
 
-	int r = ioctl(cros_ec_fd, CROS_EC_DEV_IOCXCMD, &s_cmd, sizeof(s_cmd));
+	int r = ioctl(cros_ec_fd, CROS_EC_DEV_IOCXCMD, &s_cmd);
 	if (r < 0 && errno == ENOTTY)
 		return 1;
 
