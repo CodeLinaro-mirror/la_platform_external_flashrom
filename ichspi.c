@@ -2022,7 +2022,6 @@ static const struct spi_master spi_master_ich9 = {
 	.read		= default_spi_read,
 	.write_256	= default_spi_write_256,
 	.probe_opcode	= ich_spi_probe_opcode,
-	.get_region	= ich_get_region,
 };
 
 static const struct opaque_master opaque_master_ich_hwseq = {
