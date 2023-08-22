@@ -112,14 +112,12 @@ srcs += files(
   'power.c',
   'action_descriptor.c',
   'flashchips_crosbl.c',
-  'cros_alias.c',
   'cros_ec.c',
   'cros_ec_dev.c',
   'cros_ec_wp.c',
   'big_lock.c',
   'file_lock.c',
 )
-cargs += '-DCONFIG_CROS_ALIAS=1'
 cargs += '-DCONFIG_CROS_EC=1'
 cargs += '-DUSE_BIG_LOCK=1'
 ###
@@ -331,6 +329,7 @@ programmer = {
       'board_enable.c',
       'cbtable.c',
       'internal.c',
+      'cros_alias.c',
       'internal_par.c',
       'it87spi.c',
       'sb600spi.c',
@@ -347,6 +346,7 @@ programmer = {
       'cbtable.c',
       'chipset_enable.c',
       'internal.c',
+      'cros_alias.c',
       'internal_par.c',
       'processor_enable.c',
       'pcidev.c',
@@ -355,6 +355,7 @@ programmer = {
     'flags' : [
       '-DCONFIG_INTERNAL=1',
       '-DCONFIG_INTERNAL_DMI=' + (get_option('use_internal_dmi') ? '1' : '0'),
+      '-DCONFIG_CROS_ALIAS=1',
     ]
   },
   'it8212' : {

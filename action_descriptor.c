@@ -133,7 +133,7 @@ static void fix_erasers_if_needed(struct flashchip *chip,
 	/* Need to copy no matter what. */
 	*chip = *flash->chip;
 
-#if (defined (__i386__) || defined (__x86_64__) || defined(__amd64__))
+#if ((defined (__i386__) || defined (__x86_64__) || defined(__amd64__))) && CONFIG_INTERNAL
 	/*
 	 * ich_generation is set to the chipset type when running on an x86
 	 * device, even when flashrom was invoked to program the EC.
