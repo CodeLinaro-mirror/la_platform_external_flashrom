@@ -575,10 +575,6 @@ static int cros_ec_init(const struct programmer_cfg *cfg)
 
 	cros_ec_set_max_size(&cros_ec_dev_priv, &opaque_master_cros_ec_dev);
 
-#if CONFIG_INTERNAL
-	internal_buses_supported &= ~(BUS_LPC|BUS_SPI);
-#endif
-
 	msg_pdbg("CROS_EC detected at %s\n", dev_path);
 	register_opaque_master(&opaque_master_cros_ec_dev, NULL);
 	register_shutdown(cros_ec_dev_shutdown, NULL);
