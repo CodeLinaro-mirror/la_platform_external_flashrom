@@ -180,10 +180,6 @@ const struct programmer_entry *const programmer_table[] = {
     &programmer_cros_ec,
 #endif
 
-#if CONFIG_CROS_ALIAS == 1
-    &programmer_google_host_alias,
-#endif
-
 #if CONFIG_DIRTYJTAG_SPI == 1
     &programmer_dirtyjtag_spi,
 #endif
