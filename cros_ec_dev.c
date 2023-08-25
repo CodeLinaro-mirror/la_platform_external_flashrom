@@ -58,12 +58,6 @@
 
 int cros_ec_fd;		/* File descriptor for kernel device */
 
-/* The names of the different device that can be found in a machine. */
-static const char *ec_type[] = {
-	"ec",
-	"fp",
-};
-
 /*
  * @version: Command version number (often 0)
  * @command: Command to send (EC_CMD_...)
@@ -413,25 +407,6 @@ static int cros_ec_parse_param(const struct programmer_cfg *cfg,
                                struct cros_ec_priv *priv)
 {
 	char *p;
-
-	p = extract_programmer_param_str(cfg, "type");
-	if (p) {
-		unsigned int index;
-		for (index = 0; index < ARRAY_SIZE(ec_type); index++)
-			if (!strcmp(p, ec_type[index]))
-				break;
-		if (index == ARRAY_SIZE(ec_type)) {
-			msg_perr("Invalid argument: \"%s\"\n", p);
-			free(p);
-			return 1;
-		}
-		priv->dev = ec_type[index];
-		if (!strcmp(priv->dev, "fp"))
-			msg_perr("\t\033[31;1;5;7m >> The fp subtype is deprecated! Remove call site NOW as this WILL be deleted! <<\033[0m\n");
-		priv->subtype = index;
-		msg_pdbg("Target %s used\n", priv->dev);
-	}
-	free(p);
 
 	p = extract_programmer_param_str(cfg, "block");
 	if (p) {
