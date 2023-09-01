@@ -468,7 +468,6 @@ int cros_ec_prepare(struct flashctx *flash, const uint8_t *const image, uint32_t
 	/* check layout to determine what sysjumps we are required to do. */
 	const struct flashrom_layout *const layout = get_layout(flash);
 	const enum ec_current_image region_typ = parse_layout(layout);
-	const uint8_t ec_subtype = cros_ec_priv->subtype; /* non-zero denotes non-ec path. */
 
 	if (ec_check_features(EC_FEATURE_EXEC_IN_RAM) <= 0) {
 		/* Warning: before update, we jump the EC to RO copy. If you
@@ -476,11 +475,6 @@ int cros_ec_prepare(struct flashctx *flash, const uint8_t *const image, uint32_t
 		 * cros_ec_finish().
 		 */
 		msg_pwarn("EXEC_IN_RAM unsupported..");
-
-		if (ec_subtype) {
-			msg_pwarn(" legacy component, unconditional jump to RO.\n");
-			return cros_ec_jump_copy(EC_IMAGE_RO);
-		}
 
 		if (!(region_typ & EC_IMAGE_RO) && cros_ec_get_current_image() == EC_IMAGE_RO) {
 			msg_pwarn(" image contains RW and already in RO, skipping jump.\n");
@@ -548,8 +542,7 @@ int cros_ec_finish(void)
 	 * Check that the EC had jumped to RO at cros_ec_prepare() so that
 	 * the fwcopy[RO].flags is old (0) and A/B are new otherwise return.
 	 */
-	const uint8_t ec_subtype = cros_ec_priv->subtype; /* non-zero denotes non-ec path. */
-	if (cros_ec_get_current_image() != EC_IMAGE_RO && !ec_subtype)
+	if (cros_ec_get_current_image() != EC_IMAGE_RO)
 		return 0;
 
 	/* For EC with RWSIG enabled. We need a cold reboot to enable

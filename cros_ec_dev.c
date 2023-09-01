@@ -489,7 +489,6 @@ static struct cros_ec_priv cros_ec_dev_priv = {
 	.region = NULL,
 	.ec_command = cros_ec_command_dev,
 	.dev = "ec",
-	.subtype = 0,
 	.ideal_write_size = 0,
 	.erase_block_size = 0,
 	.max_response_size = 0
