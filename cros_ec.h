@@ -31,16 +31,6 @@ struct cros_ec_priv {
 			  void *outdata, int outsize);
 
 	/*
-	 * Latest kernel supports handling of several ECs in the system.
-	 * To use that feature, the proper device file should be used:
-	 * The format is /dev/cros_XX, where XX is the type of device:
-	 * - ec: the main EC
-	 * - pd: the Power Delivery EC
-	 * - sh: the Sensor Hub EC.
-	 */
-	const char* dev;
-
-	/*
 	 * Some CrOS ECs support page write mode for their flash memory. This
 	 * represents the ideal size of a data payload to write to flash.
 	 */

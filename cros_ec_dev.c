@@ -53,7 +53,6 @@
 #include "cros_ec.h"
 #include "programmer.h"
 
-#define CROS_EC_DEV_PREFIX "/dev/cros_"
 #define CROS_EC_COMMAND_RETRIES	50
 
 int cros_ec_fd;		/* File descriptor for kernel device */
@@ -488,7 +487,6 @@ static struct cros_ec_priv cros_ec_dev_priv = {
 	.current_image = EC_IMAGE_UNKNOWN,
 	.region = NULL,
 	.ec_command = cros_ec_command_dev,
-	.dev = "ec",
 	.ideal_write_size = 0,
 	.erase_block_size = 0,
 	.max_response_size = 0
@@ -523,14 +521,10 @@ int programming_ec(void)
 
 static int cros_ec_init(const struct programmer_cfg *cfg)
 {
-	char dev_path[32];
-
 	if (cros_ec_parse_param(cfg, &cros_ec_dev_priv))
 		return 1;
 
-	snprintf(dev_path, sizeof(dev_path), "%s%s",
-			CROS_EC_DEV_PREFIX, cros_ec_dev_priv.dev);
-
+	const char *dev_path = "/dev/cros_ec";
 	msg_pdbg("%s: probing for CROS_EC at %s\n", __func__, dev_path);
 	cros_ec_fd = open(dev_path, O_RDWR);
 	if (cros_ec_fd < 0)
