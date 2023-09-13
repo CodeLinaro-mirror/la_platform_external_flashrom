@@ -27,9 +27,6 @@ struct cros_ec_priv {
 	int detected;
 	enum ec_current_image current_image;
 	struct ec_response_flash_region_info *region;
-	int (*ec_command)(int command, int ver, const void *indata, int insize,
-			  void *outdata, int outsize);
-
 	/*
 	 * Some CrOS ECs support page write mode for their flash memory. This
 	 * represents the ideal size of a data payload to write to flash.
@@ -46,6 +43,9 @@ int cros_ec_read(struct flashctx *flash, uint8_t *readarr,
              unsigned int blockaddr, unsigned int readcnt);
 int cros_ec_write(struct flashctx *flash, const uint8_t *buf, unsigned int addr,
                     unsigned int nbytes);
+int cros_ec_command(int command, int version,
+			const void *outdata, int outsize,
+			void *indata, int insize);
 
 /* used in cros_ec_wp_dep.c */
 int cros_ec_get_region_info(enum ec_flash_region region, struct ec_response_flash_region_info *info);

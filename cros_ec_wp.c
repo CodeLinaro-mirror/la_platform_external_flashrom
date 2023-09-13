@@ -48,7 +48,7 @@ enum flashrom_wp_result cros_ec_wp_read_cfg(struct flashrom_wp_cfg *cfg, struct 
 	struct ec_response_flash_protect r;
 
 	memset(&p, 0, sizeof(p));
-	int rc = cros_ec_priv->ec_command(EC_CMD_FLASH_PROTECT,
+	int rc = cros_ec_command(EC_CMD_FLASH_PROTECT,
 			EC_VER_FLASH_PROTECT, &p, sizeof(p), &r, sizeof(r));
 
 	if (rc < (int)sizeof(r)) {
@@ -103,7 +103,7 @@ enum flashrom_wp_result cros_ec_wp_write_cfg(struct flashctx *flash, const struc
 	memset(&p, 0, sizeof(p));
 	p.mask = (ro_at_boot_flag | ro_now_flag);
 	p.flags = enable ? (ro_at_boot_flag | ro_now_flag) : 0;
-	rc = cros_ec_priv->ec_command(EC_CMD_FLASH_PROTECT,
+	rc = cros_ec_command(EC_CMD_FLASH_PROTECT,
 			EC_VER_FLASH_PROTECT, &p, sizeof(p), &r, sizeof(r));
 	if (rc < 0) {
 		msg_perr("FAILED: Cannot set the RO_AT_BOOT and RO_NOW: %d\n",
@@ -113,7 +113,7 @@ enum flashrom_wp_result cros_ec_wp_write_cfg(struct flashctx *flash, const struc
 
 	/* Read back */
 	memset(&p, 0, sizeof(p));
-	rc = cros_ec_priv->ec_command(EC_CMD_FLASH_PROTECT,
+	rc = cros_ec_command(EC_CMD_FLASH_PROTECT,
 			EC_VER_FLASH_PROTECT, &p, sizeof(p), &r, sizeof(r));
 	if (rc < 0) {
 		msg_perr("FAILED: Cannot get RO_AT_BOOT and RO_NOW: %d\n",
@@ -154,7 +154,7 @@ enum flashrom_wp_result cros_ec_wp_write_cfg(struct flashctx *flash, const struc
 		memset(&p, 0, sizeof(p));
 		p.mask = EC_FLASH_PROTECT_ALL_NOW;
 		p.flags = EC_FLASH_PROTECT_ALL_NOW;
-		rc = cros_ec_priv->ec_command(EC_CMD_FLASH_PROTECT,
+		rc = cros_ec_command(EC_CMD_FLASH_PROTECT,
 				      EC_VER_FLASH_PROTECT,
 				      &p, sizeof(p), &r, sizeof(r));
 		if (rc < 0) {
@@ -164,7 +164,7 @@ enum flashrom_wp_result cros_ec_wp_write_cfg(struct flashctx *flash, const struc
 
 		/* Read back */
 		memset(&p, 0, sizeof(p));
-		rc = cros_ec_priv->ec_command(EC_CMD_FLASH_PROTECT,
+		rc = cros_ec_command(EC_CMD_FLASH_PROTECT,
 				      EC_VER_FLASH_PROTECT,
 				      &p, sizeof(p), &r, sizeof(r));
 		if (rc < 0) {

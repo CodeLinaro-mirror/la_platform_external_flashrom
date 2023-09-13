@@ -174,7 +174,7 @@ static int __cros_ec_command_dev_v2(int command, int version,
 }
 
 /*
- * cros_ec_command_dev - Issue command to CROS_EC device with retry
+ * cros_ec_command - Issue command to CROS_EC device with retry
  *
  * @command:	command code
  * @outdata:	data to send to EC
@@ -190,7 +190,7 @@ static int __cros_ec_command_dev_v2(int command, int version,
  *
  * Returns >=0 for success, or negative if other error.
  */
-static int cros_ec_command_dev(int command, int version,
+int cros_ec_command(int command, int version,
 			   const void *outdata, int outsize,
 			   void *indata, int insize)
 {
@@ -207,12 +207,12 @@ static int cros_ec_command_dev(int command, int version,
 	return ret;
 }
 
-static void cros_ec_set_max_size(struct cros_ec_priv *priv, struct opaque_master *op)
+static void cros_ec_set_max_size(struct opaque_master *op)
 {
 	struct ec_response_get_protocol_info info;
 
 	msg_pdbg("%s: sending protoinfo command\n", __func__);
-	int rc = priv->ec_command(EC_CMD_GET_PROTOCOL_INFO, 0, NULL, 0,
+	int rc = cros_ec_command(EC_CMD_GET_PROTOCOL_INFO, 0, NULL, 0,
 			      &info, sizeof(info));
 	msg_pdbg("%s: rc:%d\n", __func__, rc);
 
@@ -239,7 +239,7 @@ static void cros_ec_set_max_size(struct cros_ec_priv *priv, struct opaque_master
 }
 
 /* perform basic "hello" test to see if we can talk to the EC */
-static int cros_ec_test(struct cros_ec_priv *priv)
+static int cros_ec_test(void)
 {
 	struct ec_params_hello request;
 	struct ec_response_hello response;
@@ -248,7 +248,7 @@ static int cros_ec_test(struct cros_ec_priv *priv)
 	request.in_data = 0xf0e0d0c0;  /* Expect EC will add on 0x01020304. */
 	msg_pdbg("%s: sending HELLO request with 0x%08x\n",
 	         __func__, request.in_data);
-	int rc = priv->ec_command(EC_CMD_HELLO, 0, &request,
+	int rc = cros_ec_command(EC_CMD_HELLO, 0, &request,
 			     sizeof(request), &response, sizeof(response));
 	msg_pdbg("%s: response: 0x%08x\n", __func__, response.out_data);
 
@@ -266,7 +266,6 @@ static struct cros_ec_priv cros_ec_dev_priv = {
 	.detected = 0,
 	.current_image = EC_IMAGE_UNKNOWN,
 	.region = NULL,
-	.ec_command = cros_ec_command_dev,
 	.ideal_write_size = 0,
 };
 
@@ -305,13 +304,13 @@ static int cros_ec_init(const struct programmer_cfg *cfg)
 	if (cros_ec_fd < 0)
 		return cros_ec_fd;
 
-	if (cros_ec_test(&cros_ec_dev_priv))
+	if (cros_ec_test())
 		return 1;
 
 	/* Programmer is EC so toggle ec-alias path detection on. */
 	ec_alias_path = 1;
 
-	cros_ec_set_max_size(&cros_ec_dev_priv, &opaque_master_cros_ec_dev);
+	cros_ec_set_max_size(&opaque_master_cros_ec_dev);
 
 	msg_pdbg("CROS_EC detected at %s\n", dev_path);
 	register_opaque_master(&opaque_master_cros_ec_dev, NULL);
