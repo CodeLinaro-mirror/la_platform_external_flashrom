@@ -23,8 +23,6 @@
 #include "cros_ec_commands.h"
 #include "programmer.h"
 
-extern int cros_ec_detected;
-
 int cros_ec_probe_size(struct flashctx *flash);
 int cros_ec_block_erase(struct flashctx *flash,
                     unsigned int blockaddr, unsigned int len);

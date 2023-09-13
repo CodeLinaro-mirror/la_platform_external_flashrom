@@ -55,7 +55,7 @@
 
 #define CROS_EC_COMMAND_RETRIES	50
 
-int cros_ec_detected = 0;
+static bool g_cros_ec_detected = false;
 int cros_ec_fd;		/* File descriptor for kernel device */
 
 /*
@@ -283,11 +283,10 @@ static int cros_ec_dev_shutdown(void *data)
 }
 
 /* ugly singleton to work around cros layering violations in action_descriptor.c */
-static int ec_alias_path = 0;
-
-int programming_ec(void)
+bool programming_ec(void)
 {
-	return ec_alias_path;
+	/* Programmer is EC so toggle ec-alias path detection on. */
+	return g_cros_ec_detected;
 }
 
 static int cros_ec_init(const struct programmer_cfg *cfg)
@@ -301,15 +300,12 @@ static int cros_ec_init(const struct programmer_cfg *cfg)
 	if (cros_ec_test())
 		return 1;
 
-	/* Programmer is EC so toggle ec-alias path detection on. */
-	ec_alias_path = 1;
-
 	cros_ec_set_max_size(&opaque_master_cros_ec_dev);
 
 	msg_pdbg("CROS_EC detected at %s\n", dev_path);
 	register_opaque_master(&opaque_master_cros_ec_dev, NULL);
 	register_shutdown(cros_ec_dev_shutdown, NULL);
-	cros_ec_detected = 1;
+	g_cros_ec_detected = true;
 
 	return 0;
 }

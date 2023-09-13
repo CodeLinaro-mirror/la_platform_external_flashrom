@@ -31,7 +31,7 @@
  * This function returns 'true' if current flashrom invocation is programming
  * the EC.
  */
-int programming_ec(void);
+bool programming_ec(void);
 
 enum programmer_type {
 	PCI = 1, /* to detect uninitialized values */

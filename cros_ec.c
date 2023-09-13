@@ -468,7 +468,7 @@ static enum ec_current_image parse_layout(const struct flashrom_layout *const la
  */
 int cros_ec_prepare(struct flashctx *flash, const uint8_t *const image, uint32_t flash_size)
 {
-	if (!cros_ec_detected)
+	if (!programming_ec())
 		return 0;
 
 	if (ec_check_features(EC_FEATURE_RWSIG) > 0) {
@@ -517,7 +517,7 @@ int cros_ec_prepare(struct flashctx *flash, const uint8_t *const image, uint32_t
  */
 int cros_ec_need_2nd_pass(void)
 {
-	if (!cros_ec_detected)
+	if (!programming_ec())
 		return 0;
 
 	if (!need_2nd_pass)
@@ -550,7 +550,7 @@ bool cros_ec_erasure_failed(void)
  */
 int cros_ec_finish(void)
 {
-	if (!cros_ec_detected)
+	if (!programming_ec())
           return 0;
 
 	/*
