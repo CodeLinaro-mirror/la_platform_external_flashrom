@@ -23,18 +23,7 @@
 #include "cros_ec_commands.h"
 #include "programmer.h"
 
-struct cros_ec_priv {
-	int detected;
-	enum ec_current_image current_image;
-	struct ec_response_flash_region_info *region;
-	/*
-	 * Some CrOS ECs support page write mode for their flash memory. This
-	 * represents the ideal size of a data payload to write to flash.
-	 */
-	unsigned int ideal_write_size;
-};
-
-extern struct cros_ec_priv *cros_ec_priv;
+extern int cros_ec_detected;
 
 int cros_ec_probe_size(struct flashctx *flash);
 int cros_ec_block_erase(struct flashctx *flash,

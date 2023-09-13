@@ -55,6 +55,7 @@
 
 #define CROS_EC_COMMAND_RETRIES	50
 
+int cros_ec_detected = 0;
 int cros_ec_fd;		/* File descriptor for kernel device */
 
 /*
@@ -262,13 +263,6 @@ static int cros_ec_test(void)
 	return 0;
 }
 
-static struct cros_ec_priv cros_ec_dev_priv = {
-	.detected = 0,
-	.current_image = EC_IMAGE_UNKNOWN,
-	.region = NULL,
-	.ideal_write_size = 0,
-};
-
 static struct opaque_master opaque_master_cros_ec_dev = {
 	.max_data_read	= 128,
 	.max_data_write	= 128,
@@ -315,8 +309,7 @@ static int cros_ec_init(const struct programmer_cfg *cfg)
 	msg_pdbg("CROS_EC detected at %s\n", dev_path);
 	register_opaque_master(&opaque_master_cros_ec_dev, NULL);
 	register_shutdown(cros_ec_dev_shutdown, NULL);
-	cros_ec_dev_priv.detected = 1;
-	cros_ec_priv = &cros_ec_dev_priv;
+	cros_ec_detected = 1;
 
 	return 0;
 }

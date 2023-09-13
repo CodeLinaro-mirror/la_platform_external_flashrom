@@ -47,7 +47,22 @@
 #include "programmer.h"
 #include "spi.h"
 
-struct cros_ec_priv *cros_ec_priv;
+
+struct cros_ec_priv {
+	enum ec_current_image current_image;
+	struct ec_response_flash_region_info *region;
+
+	/*
+	 * Some CrOS ECs support page write mode for their flash memory. This
+	 * represents the ideal size of a data payload to write to flash.
+	 */
+	unsigned int ideal_write_size;
+} cros_ec_dev_priv = {
+	.current_image = EC_IMAGE_UNKNOWN,
+	.region = NULL,
+	.ideal_write_size = 0,
+};
+
 
 /* For region larger use async version for FLASH_ERASE */
 #define FLASH_SMALL_REGION_THRESHOLD (16 * 1024)
@@ -283,7 +298,7 @@ static int cros_ec_jump_copy(enum ec_current_image target)
 
 	if (current_image == p.cmd) {
 		msg_pdbg("CROS_EC is already in [%s]\n", sections[target]);
-		cros_ec_priv->current_image = target;
+		cros_ec_dev_priv.current_image = target;
 		return 0;
 	}
 
@@ -306,7 +321,7 @@ static int cros_ec_jump_copy(enum ec_current_image target)
 	}
 
 	msg_pdbg("CROS_EC jumped/rebooted to [%s]\n", sections[target]);
-	cros_ec_priv->current_image = target;
+	cros_ec_dev_priv.current_image = target;
 
 	return EC_RES_SUCCESS;
 }
@@ -453,7 +468,7 @@ static enum ec_current_image parse_layout(const struct flashrom_layout *const la
  */
 int cros_ec_prepare(struct flashctx *flash, const uint8_t *const image, uint32_t flash_size)
 {
-	if (!(cros_ec_priv && cros_ec_priv->detected))
+	if (!cros_ec_detected)
 		return 0;
 
 	if (ec_check_features(EC_FEATURE_RWSIG) > 0) {
@@ -502,7 +517,7 @@ int cros_ec_prepare(struct flashctx *flash, const uint8_t *const image, uint32_t
  */
 int cros_ec_need_2nd_pass(void)
 {
-	if (!(cros_ec_priv && cros_ec_priv->detected))
+	if (!cros_ec_detected)
 		return 0;
 
 	if (!need_2nd_pass)
@@ -535,7 +550,7 @@ bool cros_ec_erasure_failed(void)
  */
 int cros_ec_finish(void)
 {
-	if (!(cros_ec_priv && cros_ec_priv->detected))
+	if (!cros_ec_detected)
           return 0;
 
 	/*
@@ -600,9 +615,9 @@ int cros_ec_read(struct flashctx *flash, uint8_t *readarr,
  */
 static int in_current_image(unsigned int addr, unsigned int len)
 {
-	const enum ec_current_image image = cros_ec_priv->current_image;
-	const uint32_t region_offset = cros_ec_priv->region[image].offset;
-	const uint32_t region_size = cros_ec_priv->region[image].size;
+	const enum ec_current_image image = cros_ec_dev_priv.current_image;
+	const uint32_t region_offset = cros_ec_dev_priv.region[image].offset;
+	const uint32_t region_size = cros_ec_dev_priv.region[image].size;
 
 	if ((addr + len - 1 < region_offset) ||
 		(addr > region_offset + region_size - 1)) {
@@ -728,7 +743,7 @@ int cros_ec_write(struct flashctx *flash, const uint8_t *buf, unsigned int addr,
 	 * chunk size should exclude the packet header ec_params_flash_write.
 	 */
 	real_write_size = min(flash->mst->opaque.max_data_write - sizeof(p),
-			      cros_ec_priv->ideal_write_size);
+			      cros_ec_dev_priv.ideal_write_size);
 	assert(real_write_size > 0);
 
 	uint8_t *packet = malloc(sizeof(p) + real_write_size);
@@ -775,8 +790,8 @@ int cros_ec_probe_size(struct flashctx *flash)
 			 __func__, rc);
 		return 0;
 	}
-	cros_ec_priv->current_image = rc;
-	cros_ec_priv->region = &regions[0];
+	cros_ec_dev_priv.current_image = rc;
+	cros_ec_dev_priv.region = &regions[0];
 
 	uint32_t mask;
 	rc = ec_get_cmd_versions(EC_CMD_FLASH_INFO, &mask);
@@ -802,10 +817,10 @@ int cros_ec_probe_size(struct flashctx *flash)
 			return 0;
 		}
 		if (cmd_version == 0) {
-			cros_ec_priv->ideal_write_size =
+			cros_ec_dev_priv.ideal_write_size =
 				EC_FLASH_WRITE_VER0_SIZE;
 		} else {
-			cros_ec_priv->ideal_write_size = info.write_ideal_size;
+			cros_ec_dev_priv.ideal_write_size = info.write_ideal_size;
 			if (info.flags & EC_FLASH_INFO_ERASE_TO_0)
 				flash->chip->feature_bits |=
 					FEATURE_ERASED_ZERO;
@@ -863,7 +878,7 @@ int cros_ec_probe_size(struct flashctx *flash)
 				(info_2_p->banks[i].size_exp -
 				 info_2_p->banks[i].erase_size_exp);
 		}
-		cros_ec_priv->ideal_write_size = info_2_p->write_ideal_size;
+		cros_ec_dev_priv.ideal_write_size = info_2_p->write_ideal_size;
 #if 0
 		/*
 		 * TODO(b/38506987)Comment out, as some firmware were not
@@ -927,7 +942,7 @@ int cros_ec_probe_size(struct flashctx *flash)
 	/* FIXME: EC_IMAGE_* is ordered differently from EC_FLASH_REGION_*,
 	 * so we need to be careful about using these enums as array indices */
 	rc = cros_ec_get_region_info(EC_FLASH_REGION_RO,
-				 &cros_ec_priv->region[EC_IMAGE_RO]);
+				 &cros_ec_dev_priv.region[EC_IMAGE_RO]);
 	if (rc) {
 		msg_perr("%s(): Failed to probe (cannot find RO region): %d\n",
 			 __func__, rc);
@@ -935,7 +950,7 @@ int cros_ec_probe_size(struct flashctx *flash)
 	}
 
 	rc = cros_ec_get_region_info(EC_FLASH_REGION_RW,
-				 &cros_ec_priv->region[EC_IMAGE_RW]);
+				 &cros_ec_dev_priv.region[EC_IMAGE_RW]);
 	if (rc) {
 		msg_perr("%s(): Failed to probe (cannot find RW region): %d\n",
 			 __func__, rc);
