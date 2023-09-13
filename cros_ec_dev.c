@@ -56,7 +56,7 @@
 #define CROS_EC_COMMAND_RETRIES	50
 
 static bool g_cros_ec_detected = false;
-int cros_ec_fd;		/* File descriptor for kernel device */
+static int g_cros_ec_fd;		/* File descriptor for kernel device */
 
 /*
  * @version: Command version number (often 0)
@@ -86,7 +86,7 @@ struct cros_ec_command_v2 {
  * (used with upstream kernel as well as with Chrome OS v4.4 and later)
  */
 
-static int command_wait_for_response_v2(void)
+static int command_wait_for_response_v2(int cros_ec_fd)
 {
 	uint8_t s_cmd_buf[sizeof(struct cros_ec_command_v2) +
 			  sizeof(struct ec_response_get_comms_status)];
@@ -130,7 +130,7 @@ static int command_wait_for_response_v2(void)
 	return ret;
 }
 
-static int __cros_ec_command_dev_v2(int command, int version,
+static int __cros_ec_command_dev_v2(int cros_ec_fd, int command, int version,
 			   const void *outdata, int outsize,
 			   void *indata, int insize)
 {
@@ -152,7 +152,7 @@ static int __cros_ec_command_dev_v2(int command, int version,
 
 	int ret = ioctl(cros_ec_fd, CROS_EC_DEV_IOCXCMD_V2, s_cmd, size);
 	if (ret < 0 && errno == EAGAIN) {
-		ret = command_wait_for_response_v2();
+		ret = command_wait_for_response_v2(cros_ec_fd);
 		s_cmd->result = 0;
 	}
 	if (ret < 0) {
@@ -199,7 +199,7 @@ int cros_ec_command(int command, int version,
 	int attempt;
 
 	for (attempt = 0; attempt < CROS_EC_DEV_RETRY; attempt++) {
-		ret = __cros_ec_command_dev_v2(command, version, outdata,
+		ret = __cros_ec_command_dev_v2(g_cros_ec_fd, command, version, outdata,
 					       outsize, indata, insize);
 		if (ret >= 0)
 			return ret;
@@ -278,7 +278,7 @@ static struct opaque_master opaque_master_cros_ec_dev = {
 
 static int cros_ec_dev_shutdown(void *data)
 {
-	close(cros_ec_fd);
+	close(g_cros_ec_fd);
 	return 0;
 }
 
@@ -293,9 +293,9 @@ static int cros_ec_init(const struct programmer_cfg *cfg)
 {
 	const char *dev_path = "/dev/cros_ec";
 	msg_pdbg("%s: probing for CROS_EC at %s\n", __func__, dev_path);
-	cros_ec_fd = open(dev_path, O_RDWR);
-	if (cros_ec_fd < 0)
-		return cros_ec_fd;
+	g_cros_ec_fd = open(dev_path, O_RDWR);
+	if (g_cros_ec_fd < 0)
+		return g_cros_ec_fd;
 
 	if (cros_ec_test())
 		return 1;
