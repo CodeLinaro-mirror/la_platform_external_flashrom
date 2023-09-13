@@ -23,22 +23,15 @@
 #include "cros_ec_commands.h"
 #include "programmer.h"
 
-int cros_ec_probe_size(struct flashctx *flash);
 int cros_ec_block_erase(struct flashctx *flash,
                     unsigned int blockaddr, unsigned int len);
-int cros_ec_read(struct flashctx *flash, uint8_t *readarr,
-             unsigned int blockaddr, unsigned int readcnt);
-int cros_ec_write(struct flashctx *flash, const uint8_t *buf, unsigned int addr,
-                    unsigned int nbytes);
 int cros_ec_command(int command, int version,
-			const void *outdata, int outsize,
-			void *indata, int insize);
+                    const void *outdata, int outsize,
+                    void *indata, int insize);
 
 /* used in cros_ec_wp_dep.c */
 int cros_ec_get_region_info(enum ec_flash_region region, struct ec_response_flash_region_info *info);
 int cros_ec_cold_reboot(int flags);
-/* used from cros_ec_wp_dep.c in cros_ec.c */
-int set_wp(int enable);
 
 /* cros_ec_wp.c */
 enum flashrom_wp_result cros_ec_wp_read_cfg(struct flashrom_wp_cfg *cfg, struct flashctx *flash);

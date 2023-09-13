@@ -483,7 +483,7 @@ typedef int fdtype;
 #define SER_INV_FD	-1
 #endif
 
-/* cros_ec_dev.c */
+/* cros_ec.c */
 /**
  * Probe the Google Chrome OS EC device
  *
