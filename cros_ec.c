@@ -812,13 +812,7 @@ int cros_ec_probe_size(struct flashctx *flash)
 		}
 		flash->chip->total_size = info.flash_size / 1024;
 
-		/* Allow overriding the erase block size in case EC is incorrect */
-		if (cros_ec_priv->erase_block_size > 0)
-			eraser->eraseblocks[0].size =
-				cros_ec_priv->erase_block_size;
-		else
-			eraser->eraseblocks[0].size = info.erase_block_size;
-
+		eraser->eraseblocks[0].size = info.erase_block_size;
 		eraser->eraseblocks[0].count = info.flash_size /
 			eraser->eraseblocks[0].size;
 	} else {
@@ -863,9 +857,7 @@ int cros_ec_probe_size(struct flashctx *flash)
 		for (i = 0; i < info_2_p->num_banks_desc; i++) {
 			/* Allow overriding the erase block size in case EC is incorrect */
 			eraser->eraseblocks[i].size =
-				(cros_ec_priv->erase_block_size > 0 ?
-				 cros_ec_priv->erase_block_size :
-				 (unsigned) 1 << info_2_p->banks[i].erase_size_exp);
+				 (unsigned) 1 << info_2_p->banks[i].erase_size_exp;
 			eraser->eraseblocks[i].count =
 				info_2_p->banks[i].count <<
 				(info_2_p->banks[i].size_exp -

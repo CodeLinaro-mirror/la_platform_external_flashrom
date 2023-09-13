@@ -222,9 +222,6 @@ static void cros_ec_set_max_size(struct cros_ec_priv *priv, struct opaque_master
 	 * leading to sending larger commands the kernel can support.
 	 */
 	if (rc == sizeof(info) && ((info.protocol_versions & (1<<2)) == 0)) {
-		/* Allow overriding the max response size in case EC is incorrect */
-		if (priv->max_response_size)
-			info.max_response_packet_size = priv->max_response_size;
 
 		op->max_data_write = info.max_request_packet_size -
 			sizeof(struct ec_host_request);
@@ -239,69 +236,6 @@ static void cros_ec_set_max_size(struct cros_ec_priv *priv, struct opaque_master
 		msg_pdbg("%s: max_write:%d max_read:%d\n", __func__,
 			 op->max_data_write, op->max_data_read);
 	}
-}
-
-/*
- * Returns 0 to indicate success, non-zero otherwise
- *
- * This function parses programmer parameters from the command line. Since
- * CrOS EC hangs off the "internal programmer" (AP, PCH, etc) this gets
- * run during internal programmer initialization.
- */
-static int cros_ec_parse_param(const struct programmer_cfg *cfg,
-                               struct cros_ec_priv *priv)
-{
-	char *p;
-
-	p = extract_programmer_param_str(cfg, "block");
-	if (p) {
-		unsigned int block;
-		char *endptr = NULL;
-
-		errno = 0;
-		block = strtoul(p, &endptr, 0);
-		if (errno || (strlen(p) > 10) || (endptr != (p + strlen(p)))) {
-			msg_perr("Invalid argument: \"%s\"\n", p);
-			free(p);
-			return 1;
-		}
-
-		if (block <= 0) {
-			msg_perr("%s: Invalid block size\n", __func__);
-			free(p);
-			return 1;
-		}
-
-		msg_pdbg("Override block size to 0x%x\n", block);
-		priv->erase_block_size = block;
-	}
-	free(p);
-
-	p = extract_programmer_param_str(cfg, "max_response_size");
-	if (p) {
-		unsigned int max_response_size;
-		char *endptr = NULL;
-
-		errno = 0;
-		max_response_size = strtoul(p, &endptr, 0);
-		if (errno || (strlen(p) > 10) || (endptr != (p + strlen(p)))) {
-			msg_perr("Invalid max_response_size: \"%s\"\n", p);
-			free(p);
-			return 1;
-		}
-
-		if (max_response_size <= 0) {
-			msg_perr("%s: Invalid max_response_size\n", __func__);
-			free(p);
-			return 1;
-		}
-
-		msg_pdbg("Override max response size to 0x%x\n", max_response_size);
-		priv->max_response_size = max_response_size;
-	}
-	free(p);
-
-	return 0;
 }
 
 /* perform basic "hello" test to see if we can talk to the EC */
@@ -334,8 +268,6 @@ static struct cros_ec_priv cros_ec_dev_priv = {
 	.region = NULL,
 	.ec_command = cros_ec_command_dev,
 	.ideal_write_size = 0,
-	.erase_block_size = 0,
-	.max_response_size = 0
 };
 
 static struct opaque_master opaque_master_cros_ec_dev = {
@@ -367,9 +299,6 @@ int programming_ec(void)
 
 static int cros_ec_init(const struct programmer_cfg *cfg)
 {
-	if (cros_ec_parse_param(cfg, &cros_ec_dev_priv))
-		return 1;
-
 	const char *dev_path = "/dev/cros_ec";
 	msg_pdbg("%s: probing for CROS_EC at %s\n", __func__, dev_path);
 	cros_ec_fd = open(dev_path, O_RDWR);
