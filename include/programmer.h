@@ -493,6 +493,7 @@ int cros_ec_need_2nd_pass(void);
 bool cros_ec_erasure_failed(void);
 int cros_ec_finish(void);
 int cros_ec_prepare(struct flashctx *flash, const uint8_t *const image, uint32_t flash_size);
+int cros_ec_block_erase(struct flashctx *flash, unsigned int blockaddr, unsigned int len);
 
 void sp_flush_incoming(void);
 fdtype sp_openserport(char *dev, int baud);

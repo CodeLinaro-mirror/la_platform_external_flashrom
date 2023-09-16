@@ -113,7 +113,6 @@ srcs += files(
   'action_descriptor.c',
   'flashchips_crosbl.c',
   'cros_ec.c',
-  'cros_ec_wp.c',
   'big_lock.c',
   'file_lock.c',
 )

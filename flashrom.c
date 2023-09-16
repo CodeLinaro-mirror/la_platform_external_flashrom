@@ -35,7 +35,6 @@
 #include "hwaccess_physmap.h"
 #include "chipdrivers.h"
 #include "erasure_layout.h"
-#include "cros_ec.h"
 
 #include "action_descriptor.h"
 #include "spi.h"
