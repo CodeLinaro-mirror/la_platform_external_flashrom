@@ -823,16 +823,6 @@ PROGRAMMER_OBJS += dirtyjtag_spi.o
 ACTIVE_PROGRAMMERS += dirtyjtag_spi
 endif
 
-ifeq ($(CONFIG_DIRTYJTAG_SPI), yes)
-FEATURE_CFLAGS += -D'CONFIG_DIRTYJTAG_SPI=1'
-PROGRAMMER_OBJS += dirtyjtag_spi.o
-endif
-
-ifeq ($(CONFIG_DIRTYJTAG_SPI), yes)
-FEATURE_CFLAGS += -D'CONFIG_DIRTYJTAG_SPI=1'
-PROGRAMMER_OBJS += dirtyjtag_spi.o
-endif
-
 ifeq ($(CONFIG_JLINK_SPI), yes)
 FEATURE_FLAGS += -D'CONFIG_JLINK_SPI=1'
 PROGRAMMER_OBJS += jlink_spi.o

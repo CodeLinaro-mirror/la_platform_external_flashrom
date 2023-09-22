@@ -2331,8 +2331,7 @@ static int save_initial_flash_wp(struct flashctx *const flash)
 }
 
 static int unlock_flash_wp(struct flashctx *const flash,
-			   const bool read_it, const bool write_it,
-			   const bool erase_it, const bool verify_it)
+			   const bool write_it, const bool erase_it)
 
 {
 	int ret = 0;
@@ -2404,7 +2403,7 @@ int prepare_flash_access(struct flashctx *const flash,
 	int ret = 1;
 	if (flash->chip->decode_range != NO_DECODE_RANGE_FUNC ||
 	   (flash->mst->buses_supported & BUS_PROG && flash->mst->opaque.wp_write_cfg)) {
-		ret = unlock_flash_wp(flash, read_it, write_it, erase_it, verify_it);
+		ret = unlock_flash_wp(flash, write_it, erase_it);
 	}
 	/*
 	 * Fall back to chip unlock function if we haven't already successfully
