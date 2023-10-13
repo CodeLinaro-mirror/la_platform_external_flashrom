@@ -327,6 +327,7 @@ programmer = {
       'board_enable.c',
       'cbtable.c',
       'internal.c',
+      'cros_alias.c',
       'internal_par.c',
       'it87spi.c',
       'sb600spi.c',
@@ -343,6 +344,7 @@ programmer = {
       'cbtable.c',
       'chipset_enable.c',
       'internal.c',
+      'cros_alias.c',
       'internal_par.c',
       'processor_enable.c',
       'pcidev.c',
@@ -351,6 +353,7 @@ programmer = {
     'flags' : [
       '-DCONFIG_INTERNAL=1',
       '-DCONFIG_INTERNAL_DMI=' + (get_option('use_internal_dmi') ? '1' : '0'),
+      '-DCONFIG_CROS_ALIAS=1',
     ]
   },
   'it8212' : {

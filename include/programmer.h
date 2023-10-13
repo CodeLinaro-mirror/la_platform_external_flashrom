@@ -109,6 +109,7 @@ extern const struct programmer_entry programmer_usbblaster_spi;
 extern const struct programmer_entry programmer_dirtyjtag_spi;
 
 extern const struct programmer_entry programmer_cros_ec;
+extern const struct programmer_entry programmer_google_host_alias;
 
 int programmer_init(const struct programmer_entry *prog, const char *param);
 int programmer_shutdown(void);
