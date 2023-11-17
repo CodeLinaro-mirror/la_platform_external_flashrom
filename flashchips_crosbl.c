@@ -48,5 +48,13 @@ bool is_chipname_duplicate(const struct flashchip *chip)
 	 */
 	if(!strcmp(chip->name, "W25Q256JV_Q")) return true;
 
+	/* W25Q32.W has been split into three entries:
+	 * W25Q32BW/W25Q32CW/W25Q32DW, W25Q32FW and W25Q32JW...Q
+	 * We are actually using W25Q32DW, so mark the last two as duplicate.
+	 */
+	if(!strcmp(chip->name, "W25Q32FW") ||
+	   !strcmp(chip->name, "W25Q32JW...Q"))
+		return true;
+
 	return false;
 }
