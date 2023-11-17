@@ -34,8 +34,15 @@ bool is_chipname_duplicate(const struct flashchip *chip)
 	 * attempt to import the "B" from upstream entry resulted in flashrom
 	 * being unable to identify the flash on Atlas and Nocturne boards,
 	 * causing flashrom failures documented in b/168943314.
+	 *
+	 * After introducing GD25Q128E, we need to split GD25Q127C/GD25Q128C
+	 * into GD25Q127C/GD25Q128E and GD25Q128C since 127C and 128C actually
+	 * have different features (mainly QPI).
+	 * GD25Q128C is phased out now, so we mark GD25Q128C as duplicated.
 	 */
-	if(!strcmp(chip->name, "GD25B128B/GD25Q128B")) return true;
+	if(!strcmp(chip->name, "GD25B128B/GD25Q128B") ||
+	   !strcmp(chip->name, "GD25Q128C"))
+		return true;
 
 	/* The "MX25L12805D" entry stops flashrom from identifying other
 	 *  MX25L128... chips, block it. See: b/190574697.
