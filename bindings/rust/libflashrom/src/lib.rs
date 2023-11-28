@@ -532,9 +532,9 @@ impl Default for FlashromFlags {
             verify_after_write: true,
             verify_whole_chip: true,
             // These flags are introduced to address issues related to CSME locking parts. Setting
-            // them to false as default values
-            skip_unreadable_regions: false,
-            skip_unwritable_regions: false,
+            // them to true as default values
+            skip_unreadable_regions: true,
+            skip_unwritable_regions: true,
         }
     }
 }
