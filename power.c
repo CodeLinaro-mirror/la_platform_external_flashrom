@@ -29,12 +29,25 @@
 #include "power.h"
 
 /*
- * Returns the path to a lock file in which flashrom's PID should be written to
- * instruct powerd not to suspend or shut down.
- *
- * powerd checks for arbitrary lock files within /run/lock/power_override.
+ * Path of a lock file which flashrom's PID should be written to instruct
+ * powerd not to suspend or shut down. powerd checks for arbitrary lock files
+ * within /run/lock/power_override.
  */
 #define POWERD_LOCK_FILE_PATH "/run/lock/power_override/flashrom.lock"
+
+/* File that powerd creates to announce that it is about to suspend the device. */
+#define POWERD_SUSPEND_ANNOUNCED_PATH  "/run/power_manager/power/suspend_announced"
+
+static bool check_suspend_imminent(void)
+{
+	struct stat s;
+	if (stat(POWERD_SUSPEND_ANNOUNCED_PATH, &s) == 0) {
+		msg_perr("Cannot disable power management, the system "
+			 "is already preparing to enter suspend. Aborting.\n");
+		return true;
+	}
+	return false;
+}
 
 int disable_power_management(void)
 {
@@ -63,8 +76,14 @@ int disable_power_management(void)
 		msg_perr("%s: Failed to close %s: %s\n",
 			__func__, POWERD_LOCK_FILE_PATH, strerror(errno));
 	}
-	return rc;
 
+	/* Check after creating lock file to avoid race with powerd. */
+	if (check_suspend_imminent()) {
+		restore_power_management();
+		return 2;
+	}
+
+	return rc;
 }
 
 int restore_power_management(void)

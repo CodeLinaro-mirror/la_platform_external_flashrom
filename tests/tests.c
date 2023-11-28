@@ -197,13 +197,13 @@ FILE *__wrap_fdopen(int fd, const char *mode)
 int __wrap_stat(const char *path, void *buf)
 {
 	LOG_ME;
-	return 0;
+	return 1;
 }
 
 int __wrap_stat64(const char *path, void *buf)
 {
 	LOG_ME;
-	return 0;
+	return 1;
 }
 
 int __wrap___xstat(const char *path, void *buf)

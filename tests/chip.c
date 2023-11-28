@@ -171,7 +171,7 @@ void erase_chip_test_success(void **state)
 
 	static struct io_mock_fallback_open_state data = {
 		.noc	= 0,
-		.paths	= { NULL },
+		.paths	= { SUSPEND_ANNOUNCED_FILE, NULL },
 	};
 	const struct io_mock chip_io = {
 		.fallback_open_state = &data,

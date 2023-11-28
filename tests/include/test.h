@@ -32,6 +32,7 @@
 #define MOCK_FD (0x10ec)
 
 #define LOCK_FILE "/run/lock/firmware_utility_lock"
+#define SUSPEND_ANNOUNCED_FILE "/run/power_manager/power/suspend_announced"
 
 /*
  * Having this as function allows to set a breakpoint on the address,

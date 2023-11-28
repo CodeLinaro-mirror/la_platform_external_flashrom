@@ -2391,8 +2391,10 @@ int prepare_flash_access(struct flashctx *const flash,
 
 	/* FIXME(b/207787495): replace this with locking in futility. */
 	/* Let powerd know that we're updating firmware so machine stays awake. */
-	if (write_it || erase_it)
-		disable_power_management();
+	if (write_it || erase_it) {
+		if (disable_power_management() == 2) /* FIXME(b:314677563): check ret */
+			return 1;
+	}
 
 	if (map_flash(flash) != 0)
 		return 1;
