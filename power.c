@@ -35,15 +35,17 @@
  */
 #define POWERD_LOCK_FILE_PATH "/run/lock/power_override/flashrom.lock"
 
-/* File that powerd creates to announce that it is about to suspend the device. */
+/* Files created by powerd to announce an imminent shutdown or suspend. */
 #define POWERD_SUSPEND_ANNOUNCED_PATH  "/run/power_manager/power/suspend_announced"
+#define POWERD_SHUTDOWN_ANNOUNCED_PATH  "/run/power_manager/power/shutdown_announced"
 
 static bool check_suspend_imminent(void)
 {
 	struct stat s;
-	if (stat(POWERD_SUSPEND_ANNOUNCED_PATH, &s) == 0) {
+	if ((stat(POWERD_SUSPEND_ANNOUNCED_PATH, &s) == 0) ||
+	    (stat(POWERD_SHUTDOWN_ANNOUNCED_PATH, &s) == 0)) {
 		msg_perr("Cannot disable power management, the system "
-			 "is already preparing to enter suspend. Aborting.\n");
+			 "is already preparing to suspend/shutdown. Aborting.\n");
 		return true;
 	}
 	return false;
