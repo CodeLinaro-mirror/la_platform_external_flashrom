@@ -39,6 +39,7 @@
 #define POWERD_SUSPEND_ANNOUNCED_PATH  "/run/power_manager/power/suspend_announced"
 #define POWERD_SHUTDOWN_ANNOUNCED_PATH  "/run/power_manager/power/shutdown_announced"
 
+#if 0 // FIXME(b/315054746)
 static bool check_suspend_imminent(void)
 {
 	struct stat s;
@@ -50,6 +51,7 @@ static bool check_suspend_imminent(void)
 	}
 	return false;
 }
+#endif
 
 int disable_power_management(void)
 {
@@ -79,11 +81,13 @@ int disable_power_management(void)
 			__func__, POWERD_LOCK_FILE_PATH, strerror(errno));
 	}
 
+#if 0 // FIXME(b/315054746)
 	/* Check after creating lock file to avoid race with powerd. */
 	if (check_suspend_imminent()) {
 		restore_power_management();
 		return 2;
 	}
+#endif
 
 	return rc;
 }
