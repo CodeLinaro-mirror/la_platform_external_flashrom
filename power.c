@@ -39,9 +39,20 @@
 #define POWERD_SUSPEND_ANNOUNCED_PATH  "/run/power_manager/power/suspend_announced"
 #define POWERD_SHUTDOWN_ANNOUNCED_PATH  "/run/power_manager/power/shutdown_announced"
 
-#if 0 // FIXME(b/315054746)
+/*
+ * Env var set by powerd's setuid helper. If running from powerd, ignore
+ * suspend/shutdown announced files.
+ */
+#define POWERD_SETUID_HELPER_ENV "POWERD_SETUID_HELPER"
+
 static bool check_suspend_imminent(void)
 {
+	if (getenv(POWERD_SETUID_HELPER_ENV)) {
+		msg_pdbg("%s env var is set: skipping check for suspend/shutdown"
+			 "announcment files.\n", POWERD_SETUID_HELPER_ENV);
+		return false;
+	}
+
 	struct stat s;
 	if ((stat(POWERD_SUSPEND_ANNOUNCED_PATH, &s) == 0) ||
 	    (stat(POWERD_SHUTDOWN_ANNOUNCED_PATH, &s) == 0)) {
@@ -51,7 +62,6 @@ static bool check_suspend_imminent(void)
 	}
 	return false;
 }
-#endif
 
 int disable_power_management(void)
 {
@@ -81,13 +91,11 @@ int disable_power_management(void)
 			__func__, POWERD_LOCK_FILE_PATH, strerror(errno));
 	}
 
-#if 0 // FIXME(b/315054746)
 	/* Check after creating lock file to avoid race with powerd. */
 	if (check_suspend_imminent()) {
 		restore_power_management();
 		return 2;
 	}
-#endif
 
 	return rc;
 }
