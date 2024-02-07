@@ -180,6 +180,7 @@ struct WriteProtect {
 pub struct WriteProtectState<'a> {
     current: WriteProtect,
     initial: WriteProtect,
+    initial_range: (i64, i64),
     cmd: &'a dyn Flashrom,
     fc: FlashChip,
 }
@@ -188,12 +189,16 @@ impl<'a> WriteProtectState<'a> {
     /// Initialize a state from the current state of the hardware.
     pub fn from_hardware(cmd: &'a dyn Flashrom, fc: FlashChip) -> Result<Self, FlashromError> {
         let hw = Self::get_hw(cmd)?;
-        let sw = Self::get_sw(cmd)?;
-        info!("Initial write protect state: HW={} SW={}", hw, sw);
+        let (sw, initial_range) = cmd.wp_status()?;
+        info!(
+            "Initial write protect state: HW={} SW={} Range={:?}",
+            hw, sw, initial_range
+        );
 
         Ok(WriteProtectState {
             current: WriteProtect { hw, sw },
             initial: WriteProtect { hw, sw },
+            initial_range,
             cmd,
             fc,
         })
@@ -210,7 +215,7 @@ impl<'a> WriteProtectState<'a> {
 
     /// Get the actual software write protect state.
     fn get_sw(cmd: &dyn Flashrom) -> Result<bool, FlashromError> {
-        let b = cmd.wp_status(true)?;
+        let b = cmd.wp_mode(true)?;
         Ok(b)
     }
 
@@ -298,9 +303,9 @@ impl<'a> WriteProtectState<'a> {
     fn drop_internal(&mut self) -> Result<(), String> {
         // Toggle both protects back to their initial states.
         // Software first because we can't change it once hardware is enabled.
-        if self.set_sw(self.initial.sw).is_err() {
+        if self.set_range(self.initial_range, self.initial.sw).is_err() {
             self.set_hw(false)?;
-            self.set_sw(self.initial.sw)?;
+            self.set_range(self.initial_range, self.initial.sw)?;
         }
         self.set_hw(self.initial.hw)?;
 

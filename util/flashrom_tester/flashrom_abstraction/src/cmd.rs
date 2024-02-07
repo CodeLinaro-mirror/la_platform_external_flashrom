@@ -37,6 +37,8 @@ use crate::{FlashChip, FlashromError};
 
 use libflashrom::FlashromFlags;
 
+use regex::Regex;
+
 use std::{
     ffi::{OsStr, OsString},
     path::Path,
@@ -199,11 +201,7 @@ impl crate::Flashrom for FlashromCmd {
         Ok(stdout)
     }
 
-    fn wp_status(&self, en: bool) -> Result<bool, FlashromError> {
-        let status = if en { "en" } else { "dis" };
-        let protection_mode = if en { "hardware" } else { "disable" };
-        info!("See if chip write protect is {}abled", status);
-
+    fn wp_status(&self) -> Result<(bool, (i64, i64)), FlashromError> {
         let opts = FlashromOpt {
             wp_opt: WPOpt {
                 status: true,
@@ -214,8 +212,8 @@ impl crate::Flashrom for FlashromCmd {
         };
 
         let (stdout, _) = self.dispatch(opts, "wp_status")?;
-        let s = std::format!("Protection mode: {}", protection_mode);
-        Ok(stdout.contains(&s))
+        parse_wp_status_output(&stdout)
+            .map_err(|e| format!("Failed to parse wp_status: {}", e).into())
     }
 
     fn wp_toggle(&self, en: bool) -> Result<bool, FlashromError> {
@@ -227,7 +225,7 @@ impl crate::Flashrom for FlashromCmd {
         };
         self.wp_range(range, en)?;
         let status = if en { "en" } else { "dis" };
-        match self.wp_status(true) {
+        match self.wp_mode(true) {
             Ok(_ret) => {
                 info!("Successfully {}abled write-protect", status);
                 Ok(true)
@@ -436,6 +434,23 @@ fn hex_range_string(s: i64, l: i64) -> String {
     format!("{:#08X},{:#08X}", s, l)
 }
 
+fn parse_wp_status_output(stdout: &str) -> Result<(bool, (i64, i64)), String> {
+    let sw = match stdout {
+        s if s.contains("Protection mode: hardware") => true,
+        s if s.contains("Protection mode: disable") => false,
+        _ => return Err(format!("Unknown protection mode in wp_status: {}", stdout)),
+    };
+    let re =
+        Regex::new(r"Protection range:\s*start=0x(?P<start>[0-9a-fA-F]+)\s+length=0x(?P<length>[0-9a-fA-F]+)")
+            .unwrap();
+    let captures = re
+        .captures(stdout)
+        .ok_or_else(|| format!("No match found in wp_status: {}", stdout))?;
+    let start = i64::from_str_radix(&captures["start"], 16).map_err(|e| e.to_string())?;
+    let length = i64::from_str_radix(&captures["length"], 16).map_err(|e| e.to_string())?;
+    Ok((sw, (start, length)))
+}
+
 /// Get a flash vendor and name from the first matching line of flashrom output.
 ///
 /// The target line looks like 'vendor="foo" name="bar"', as output by flashrom --flash-name.
@@ -607,5 +622,92 @@ mod tests {
             ),
             None
         )
+    }
+
+    #[test]
+    fn test_parse_wp_status_output() {
+        use super::parse_wp_status_output;
+
+        // SW WP enabled (lower 1/2)
+        assert_eq!(
+            parse_wp_status_output(
+r#"flashrom v1.6.0-devel on Linux 5.15.0-stub (aarch64)
+flashrom is free software, get the source code at https://flashrom.org
+
+Using default programmer "internal" with arguments "".
+Opened /dev/mtd0 successfully
+Found Programmer flash chip "Opaque flash chip" (8192 kB, Programmer-specific) on internal.
+Protection range: start=0x00000000 length=0x00400000 (lower 1/2)
+Protection mode: hardware
+SUCCESS"#
+            ),
+            Ok((true, (0, 0x0040_0000)))
+        );
+
+        // SW WP enabled (upper 1/2)
+        assert_eq!(
+            parse_wp_status_output(
+r#"flashrom v1.6.0-devel on Linux 5.15.0-stub (aarch64)
+flashrom is free software, get the source code at https://flashrom.org
+
+Using default programmer "internal" with arguments "".
+Opened /dev/mtd0 successfully
+Found Programmer flash chip "Opaque flash chip" (8192 kB, Programmer-specific) on internal.
+Protection range: start=0x00400000 length=0x00400000 (upper 1/2)
+Protection mode: hardware
+SUCCESS"#
+            ),
+            Ok((true, (0x0040_0000, 0x0040_0000)))
+        );
+
+        // SW WP disabled
+        assert_eq!(
+            parse_wp_status_output(
+r#"flashrom v1.6.0-devel on Linux 5.15.0-stub (aarch64)
+flashrom is free software, get the source code at https://flashrom.org
+
+Using default programmer "internal" with arguments "".
+Opened /dev/mtd0 successfully
+Found Programmer flash chip "Opaque flash chip" (8192 kB, Programmer-specific) on internal.
+Protection range: start=0x00000000 length=0x00000000 (none)
+Protection mode: disabled
+SUCCESS"#
+            ),
+            Ok((false, (0, 0)))
+        );
+
+        // Unsupported protection mode (permanent)
+        assert!(parse_wp_status_output(
+r#"flashrom v1.6.0-devel on Linux 5.15.0-stub (aarch64)
+flashrom is free software, get the source code at https://flashrom.org
+
+Using default programmer "internal" with arguments "".
+Opened /dev/mtd0 successfully
+Found Programmer flash chip "Opaque flash chip" (8192 kB, Programmer-specific) on internal.
+Protection range: start=0x00000000 length=0x00000000 (none)
+Protection mode: permanent
+SUCCESS"#
+        ).is_err());
+
+        // Missing protection mode
+        assert!(parse_wp_status_output(
+r#"Protection range: start=0x00400000 length=0x00400000 (upper 1/2)
+SUCCESS"#
+        )
+        .is_err());
+
+        // Missing range
+        assert!(parse_wp_status_output(
+r#"Protection mode: hardware
+SUCCESS"#
+        ).is_err());
+
+        // Malformed hex string
+        assert!(parse_wp_status_output(
+r#"Protection range: start=0xXYZ length=0x00400000 (none)
+Protection mode: hardware
+SUCCESS"#
+        )
+        .is_err());
     }
 }

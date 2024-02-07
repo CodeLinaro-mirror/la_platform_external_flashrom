@@ -120,8 +120,24 @@ pub trait Flashrom {
     /// Read the write protect regions for the flash.
     fn wp_list(&self) -> Result<String, FlashromError>;
 
-    /// Return true if the flash write protect status matches `en`.
-    fn wp_status(&self, en: bool) -> Result<bool, FlashromError>;
+    /// Return the write protection status and range.
+    /// A `Result` tuple containing:
+    /// * A `bool` value indicating whether write protection is enabled.
+    /// * A `(i64, i64)` tuple containing the start and length of the write protection range.
+    ///   Return `FlashromError` if an error occurs.
+    fn wp_status(&self) -> Result<(bool, (i64, i64)), FlashromError>;
+
+    /// Return true if the flash write protect mode matches `en`.
+    fn wp_mode(&self, en: bool) -> Result<bool, FlashromError> {
+        let status = if en { "en" } else { "dis" };
+        info!("See if chip write protect is {}abled", status);
+        let (mode, (start, len)) = self.wp_status()?;
+        info!(
+            "(en: {}, (start: 0x{:x}, length: 0x{:x}))",
+            mode, start, len
+        );
+        Ok(en == mode)
+    }
 
     /// Set write protect status.
     /// If en=true sets wp_range to the whole chip (0,getsize()).

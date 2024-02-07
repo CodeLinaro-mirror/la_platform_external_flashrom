@@ -87,18 +87,19 @@ impl crate::Flashrom for FlashromLib {
         Ok(format!("{:?}", ranges))
     }
 
-    fn wp_status(&self, en: bool) -> Result<bool, FlashromError> {
-        let ret = self
+    fn wp_status(&self) -> Result<(bool, (i64, i64)), FlashromError> {
+        let wp_cfg = self
             .flashrom
             .borrow_mut()
             .get_wp()
-            .map_err(|e| format!("{:?}", e))?
-            .get_mode();
-        if en {
-            Ok(ret != libflashrom::flashrom_wp_mode::FLASHROM_WP_MODE_DISABLED)
-        } else {
-            Ok(ret == libflashrom::flashrom_wp_mode::FLASHROM_WP_MODE_DISABLED)
-        }
+            .map_err(|e| format!("{:?}", e))?;
+        let sw = match wp_cfg.get_mode() {
+            libflashrom::flashrom_wp_mode::FLASHROM_WP_MODE_HARDWARE => true,
+            libflashrom::flashrom_wp_mode::FLASHROM_WP_MODE_DISABLED => false,
+            other => panic!("Invalid flashrom WP mode: {:?}", other),
+        };
+        let range = wp_cfg.get_range();
+        Ok((sw, (range.start as i64, range.len() as i64)))
     }
 
     fn wp_toggle(&self, en: bool) -> Result<bool, FlashromError> {
