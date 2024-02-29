@@ -27,9 +27,15 @@
 #include "flash.h"
 #include "programmer.h"
 
-static bool use_clock_gettime = false;
-
 #if HAVE_CLOCK_GETTIME == 1
+
+/*
+ * For Linux in particular, clock_getres() does NOT provide details of the
+ * underlying hardware clock resolution for clock_gettime() -- it only
+ * describes the resolution of timer alarms. Thus, we simply assume
+ * clock_gettime() provides sufficient precision when available.
+ */
+static const bool use_clock_gettime = true;
 
 #ifdef _POSIX_MONOTONIC_CLOCK
 static clockid_t clock_id = CLOCK_MONOTONIC;
@@ -51,28 +57,11 @@ static void clock_usec_delay(int usecs)
 		clock_gettime(clock_id, &now);
 	} while (now.tv_sec < end.tv_sec || (now.tv_sec == end.tv_sec && now.tv_nsec < end.tv_nsec));
 }
-
-static int clock_check_res(void)
-{
-	struct timespec res;
-	if (!clock_getres(clock_id, &res)) {
-		if (res.tv_sec == 0 && res.tv_nsec <= 100) {
-			msg_pinfo("Using clock_gettime for delay loops (clk_id: %d, resolution: %ldns).\n",
-				  (int)clock_id, res.tv_nsec);
-			use_clock_gettime = true;
-			return 1;
-		}
-	} else if (clock_id != CLOCK_REALTIME && errno == EINVAL) {
-		/* Try again with CLOCK_REALTIME. */
-		clock_id = CLOCK_REALTIME;
-		return clock_check_res();
-	}
-	return 0;
-}
 #else
 
+static const bool use_clock_gettime = false;
+
 static inline void clock_usec_delay(int usecs) {}
-static inline int clock_check_res(void) { return 0; }
 
 #endif /* HAVE_CLOCK_GETTIME == 1 */
 
@@ -135,7 +124,11 @@ static unsigned long measure_delay(unsigned int usecs)
 
 void myusec_calibrate_delay(void)
 {
-	if (clock_check_res())
+	/*
+	 * If we're using clock_gettime(), there's no need for calibration
+	 * overhead.
+	 */
+	if (use_clock_gettime)
 		return;
 
 	unsigned long count = 1000;
