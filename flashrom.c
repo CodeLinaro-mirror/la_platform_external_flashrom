@@ -2719,9 +2719,6 @@ int flashrom_image_write(struct flashctx *const flashctx, void *const buffer, co
 	if (verify && !all_skipped) {
 		msg_cinfo("Verifying flash... ");
 
-		/* Work around chips which need some time to calm down. */
-		programmer_delay(flashctx, 1000*1000);
-
 		ret = verify_by_layout(flashctx, verify_layout, curcontents, newcontents);
 		/* If we tried to write, and verification now fails, we
 		   might have an emergency situation. */
