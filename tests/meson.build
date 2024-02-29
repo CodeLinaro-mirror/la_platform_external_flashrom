@@ -24,7 +24,6 @@ test_srcs = files(
   'chip_wp.c',
   'selfcheck.c',
   'io_real.c',
-  'erase_func_algo.c',
 )
 
 if not programmer.get('dummy').get('active')
