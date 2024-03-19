@@ -439,7 +439,7 @@ static void pprint_freg(const struct ich_desc_region *reg, uint32_t i)
 {
 	static const char *const region_names[] = {
 		"Descr.", "BIOS", "ME", "GbE", "Platf.", "DevExp", "BIOS2", "unknown",
-		"EC/BMC", "unknown", "IE", "10GbE", "unknown", "unknown", "unknown", "unknown"
+		"EC/BMC", "unknown", "IE", "10GbE0", "10GbE1", "unknown", "unknown", "PTT"
 	};
 	if (i >= ARRAY_SIZE(region_names)) {
 		msg_pdbg2("%s: region index too high.\n", __func__);
