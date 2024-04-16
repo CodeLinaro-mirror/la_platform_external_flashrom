@@ -44,10 +44,17 @@ bool is_chipname_duplicate(const struct flashchip *chip)
 	   !strcmp(chip->name, "GD25Q128C"))
 		return true;
 
-	/* The "MX25L12805D" entry stops flashrom from identifying other
-	 *  MX25L128... chips, block it. See: b/190574697.
+	/* MX25L128... has been split into several entries:
+	 * "MX25L12805D" (b/190574697), "MX25L12833F",
+	 * "MX25L12835F/MX25L12873F", "MX25L12845E/MX25L12865E" (b/332486637),
+	 * and "MX25L12850F" (CB:81350),
+	 * We are actually using MX25L12833F, so mark the others as duplicate.
 	 */
-	if(!strcmp(chip->name, "MX25L12805D")) return true;
+	if(!strcmp(chip->name, "MX25L12805D") ||
+	   !strcmp(chip->name, "MX25L12835F/MX25L12873F") ||
+	   !strcmp(chip->name, "MX25L12845E/MX25L12865E") ||
+	   !strcmp(chip->name, "MX25L12850F"))
+		return true;
 
 	/* W25Q256.V has been split into two entries: W25Q256FV and
 	 * W25Q256JV_Q.
