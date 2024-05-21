@@ -107,7 +107,7 @@ static int file_lock_open_or_create(struct ipc_lock *lock)
 
 	lock->fd = open(path, O_RDWR | O_CREAT, 0600);
 	if (lock->fd < 0) {
-		msg_gerr("Cannot open lockfile %s", path);
+		msg_gerr("Cannot open lockfile %s\n", path);
 		return -1;
 	}
 
@@ -133,7 +133,7 @@ static int file_lock_get(struct ipc_lock *lock, int timeout_msecs)
 		struct timespec rem;
 
 		if (errno != EWOULDBLOCK) {
-			msg_gerr("Error obtaining lock");
+			msg_gerr("Error obtaining lock\n");
 			return -1;
 		}
 
@@ -145,7 +145,7 @@ static int file_lock_get(struct ipc_lock *lock, int timeout_msecs)
 				sleep_interval = rem;
 				continue;
 			}
-			msg_gerr("nanosleep() failed");
+			msg_gerr("nanosleep() failed\n");
 			return -1;
 		}
 
@@ -173,14 +173,14 @@ static int file_lock_write_pid(struct ipc_lock *lock)
 	char pid_str[11];
 
 	if (ftruncate(lock->fd, 0) < 0) {
-		msg_gerr("Cannot truncate lockfile");
+		msg_gerr("Cannot truncate lockfile\n");
 		return -1;
 	}
 
 	snprintf(pid_str, sizeof(pid_str), "%lu", (unsigned long)getpid());
 	len = write(lock->fd, pid_str, strlen(pid_str));
 	if (len < 0) {
-		msg_gerr("Cannot write PID to lockfile");
+		msg_gerr("Cannot write PID to lockfile\n");
 		return -1;
 	}
 
@@ -190,10 +190,10 @@ static int file_lock_write_pid(struct ipc_lock *lock)
 static void file_lock_release(struct ipc_lock *lock)
 {
 	if (flock(lock->fd, LOCK_UN) < 0)
-		msg_gerr("Cannot release lock");
+		msg_gerr("Cannot release lock\n");
 
 	if (close(lock->fd) < 0)
-		msg_gerr("Cannot close lockfile");
+		msg_gerr("Cannot close lockfile\n");
 }
 
 /*
