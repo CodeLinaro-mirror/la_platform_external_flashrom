@@ -154,9 +154,6 @@
 #define ICH9_FADDR_FLA		0x01ffffff
 #define ICH9_REG_FDATA0		0x10	/* 64 Bytes */
 
-#define ICH_REG_BIOS_BM_RAP	0x118	/* 16 Bits BIOS Master Read Access Permissions */
-#define ICH_REG_BIOS_BM_WAP	0x11c	/* 16 Bits BIOS Master Write Access Permissions */
-
 #define ICH9_REG_FRAP		0x50	/* 32 Bytes Flash Region Access Permissions */
 #define ICH9_REG_FREG0		0x54	/* 32 Bytes Flash Region 0 */
 
@@ -1881,52 +1878,8 @@ static enum ich_access_protection ec_region_rwperms(unsigned int i)
 	return rwperms;
 }
 
-static void ich_get_bios_region_access(uint32_t *region_read_access,
-				       uint32_t *region_write_access)
-{
-	uint32_t tmp;
-	*region_read_access = 0;
-	*region_write_access = 0;
-
-	if (ich_generation >= CHIPSET_METEOR_LAKE) {
-		/*
-		 * Starting from Meteor Lake, we need to fetch the region
-		 * read/write access permissions from the BIOS_BM registers
-		 * because we need to support FREG9 or above.
-		 */
-		*region_read_access = mmio_readw(ich_spibar + ICH_REG_BIOS_BM_RAP);
-		*region_write_access = mmio_readw(ich_spibar + ICH_REG_BIOS_BM_WAP);
-	} else {
-		/*
-		 * FRAP - Flash Regions Access Permissions Register
-		 * Bit Descriptions:
-		 * 31:24 BIOS Master Write Access Grant (BMWAG)
-		 * 23:16 BIOS Master Read Access Grant (BMRAG)
-		 * 15:8 BIOS Region Write Access (BRWA)
-		 * 7:0 BIOS Region Read Access (BRRA)
-		 */
-		tmp = mmio_readl(ich_spibar + ICH9_REG_FRAP);
-		msg_pdbg("0x50: 0x%08"PRIx32" (FRAP)\n", tmp);
-		msg_pdbg("BMWAG 0x%02"PRIx32", ", ICH_BMWAG(tmp));
-		msg_pdbg("BMRAG 0x%02"PRIx32", ", ICH_BMRAG(tmp));
-		msg_pdbg("BRWA 0x%02"PRIx32", ", ICH_BRWA(tmp));
-		msg_pdbg("BRRA 0x%02"PRIx32"\n", ICH_BRRA(tmp));
-
-		*region_read_access = ICH_BRRA(tmp);
-		*region_write_access = ICH_BRWA(tmp);
-	}
-}
-
-inline static unsigned int ich_get_defined_region_count(void) {
-	if (ich_generation >= CHIPSET_METEOR_LAKE)
-		return 16;
-	return 8;
-}
-
-static enum ich_access_protection ich9_handle_region_access(struct fd_region *fd_regions,
-							    uint32_t region_read_access,
-							    uint32_t region_write_access,
-							    unsigned int i)
+static enum ich_access_protection ich9_handle_frap(struct fd_region *fd_regions,
+						   uint32_t frap, unsigned int i)
 {
 	static const char *const region_names[] = {
 		"Flash Descriptor", "BIOS", "Management Engine",
@@ -1954,14 +1907,14 @@ static enum ich_access_protection ich9_handle_region_access(struct fd_region *fd
 	}
 	msg_pdbg("0x%02X: 0x%08"PRIx32" ", offset, freg);
 
-	if (i < ich_get_defined_region_count()) {
-		rwperms_idx = (((region_write_access >> i) & 1) << 1) |
-			      (((region_read_access >> i) & 1) << 0);
+	if (i < 8) {
+		rwperms_idx = (((ICH_BRWA(frap) >> i) & 1) << 1) |
+			      (((ICH_BRRA(frap) >> i) & 1) << 0);
 		rwperms = access_perms_to_protection[rwperms_idx];
 	} else if (i == EMBEDDED_CONTROLLER_REGION && ich_generation >= CHIPSET_100_SERIES_SUNRISE_POINT) {
 		rwperms = ec_region_rwperms(i);
 	} else {
-		/* Datasheets might not define all the access bits for regions. We
+		/* Datasheets don't define any access bits for regions > 7. We
 		   can't rely on the actual descriptor settings either as there
 		   are several overrides for them (those by other masters are
 		   not even readable by us, *shrug*). */
@@ -2268,15 +2221,16 @@ static int init_ich_default(const struct programmer_cfg *cfg, void *spibar, enum
 	}
 
 	if (desc_valid) {
-		/* Get the region access data from FRAP/BIOS_BM */
-		unsigned int region_read_access, region_write_access;
-		ich_get_bios_region_access(&region_read_access, &region_write_access);
+		tmp = mmio_readl(spibar + ICH9_REG_FRAP);
+		msg_pdbg("0x50: 0x%08"PRIx32" (FRAP)\n", tmp);
+		msg_pdbg("BMWAG 0x%02"PRIx32", ", ICH_BMWAG(tmp));
+		msg_pdbg("BMRAG 0x%02"PRIx32", ", ICH_BMRAG(tmp));
+		msg_pdbg("BRWA 0x%02"PRIx32", ", ICH_BRWA(tmp));
+		msg_pdbg("BRRA 0x%02"PRIx32"\n", ICH_BRRA(tmp));
 
-		/* Handle FREGx and region access */
+		/* Handle FREGx and FRAP registers */
 		for (i = 0; i < num_freg; i++)
-			ich_spi_rw_restricted |= ich9_handle_region_access(hwseq_data.fd_regions,
-									   region_read_access,
-									   region_write_access, i);
+			ich_spi_rw_restricted |= ich9_handle_frap(hwseq_data.fd_regions, tmp, i);
 		if (ich_spi_rw_restricted)
 			msg_pinfo("Not all flash regions are freely accessible by flashrom. This is "
 				  "most likely\ndue to an active ME. Please see "
