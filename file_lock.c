@@ -93,7 +93,11 @@ static int file_lock_open_or_create(struct ipc_lock *lock)
 {
 	char path[PATH_MAX];
 	const char *dir = SYSTEM_LOCKFILE_DIR;
+#ifdef __ANDROID__
+	const char fallback[] = "/data/local/tmp";
+#else
 	const char fallback[] = "/tmp";
+#endif
 
 	if (test_dir(dir)) {
 		dir = fallback;
