@@ -13,92 +13,30 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
  */
 
 #include "flash.h"
+#include "chipdrivers.h"
 
-static int printlock_w39_fwh_block(struct flashchip *flash, unsigned int offset)
-{
-	chipaddr wrprotect = flash->virtual_registers + offset + 2;
-	uint8_t locking;
-
-	locking = chip_readb(wrprotect);
-	msg_cdbg("Lock status of block at 0x%08x is ", offset);
-	switch (locking & 0x7) {
-	case 0:
-		msg_cdbg("Full Access.\n");
-		break;
-	case 1:
-		msg_cdbg("Write Lock (Default State).\n");
-		break;
-	case 2:
-		msg_cdbg("Locked Open (Full Access, Lock Down).\n");
-		break;
-	case 3:
-		msg_cerr("Error: Write Lock, Locked Down.\n");
-		break;
-	case 4:
-		msg_cdbg("Read Lock.\n");
-		break;
-	case 5:
-		msg_cdbg("Read/Write Lock.\n");
-		break;
-	case 6:
-		msg_cerr("Error: Read Lock, Locked Down.\n");
-		break;
-	case 7:
-		msg_cerr("Error: Read/Write Lock, Locked Down.\n");
-		break;
-	}
-
-	/* Read or write lock present? */
-	return (locking & ((1 << 2) | (1 << 0))) ? -1 : 0;
-}
-
-static int unlock_w39_fwh_block(struct flashchip *flash, unsigned int offset)
-{
-	chipaddr wrprotect = flash->virtual_registers + offset + 2;
-	uint8_t locking;
-
-	locking = chip_readb(wrprotect);
-	/* Read or write lock present? */
-	if (locking & ((1 << 2) | (1 << 0))) {
-		/* Lockdown active? */
-		if (locking & (1 << 1)) {
-			msg_cerr("Can't unlock block at 0x%08x!\n", offset);
-			return -1;
-		} else {
-			msg_cdbg("Unlocking block at 0x%08x\n", offset);
-			chip_writeb(0, wrprotect);
-		}
-	}
-
-	return 0;
-}
-
-static uint8_t w39_idmode_readb(struct flashchip *flash, unsigned int offset)
+static uint8_t w39_idmode_readb(struct flashctx *flash, unsigned int offset)
 {
 	chipaddr bios = flash->virtual_memory;
 	uint8_t val;
 
 	/* Product Identification Entry */
-	chip_writeb(0xAA, bios + 0x5555);
-	chip_writeb(0x55, bios + 0x2AAA);
-	chip_writeb(0x90, bios + 0x5555);
-	programmer_delay(10);
+	chip_writeb(flash, 0xAA, bios + 0x5555);
+	chip_writeb(flash, 0x55, bios + 0x2AAA);
+	chip_writeb(flash, 0x90, bios + 0x5555);
+	programmer_delay(flash, 10);
 
 	/* Read something, maybe hardware lock bits */
-	val = chip_readb(bios + offset);
+	val = chip_readb(flash, bios + offset);
 
 	/* Product Identification Exit */
-	chip_writeb(0xAA, bios + 0x5555);
-	chip_writeb(0x55, bios + 0x2AAA);
-	chip_writeb(0xF0, bios + 0x5555);
-	programmer_delay(10);
+	chip_writeb(flash, 0xAA, bios + 0x5555);
+	chip_writeb(flash, 0x55, bios + 0x2AAA);
+	chip_writeb(flash, 0xF0, bios + 0x5555);
+	programmer_delay(flash, 10);
 
 	return val;
 }
@@ -110,6 +48,15 @@ static int printlock_w39_tblwp(uint8_t lock)
 	msg_cdbg("Hardware remaining chip locking (#WP) is %sactive..\n",
 		(lock & (1 << 3)) ? "" : "not ");
 	if (lock & ((1 << 2) | (1 << 3)))
+		return -1;
+
+	return 0;
+}
+
+static int printlock_w39_single_bootblock(uint8_t lock, uint16_t kB)
+{
+	msg_cdbg("Software %d kB bootblock locking is %sactive.\n", kB, (lock & 0x03) ? "" : "not ");
+	if (lock & 0x03)
 		return -1;
 
 	return 0;
@@ -127,7 +74,7 @@ static int printlock_w39_bootblock_64k16k(uint8_t lock)
 	return 0;
 }
 
-static int printlock_w39_common(struct flashchip *flash, unsigned int offset)
+static int printlock_w39_common(struct flashctx *flash, unsigned int offset)
 {
 	uint8_t lock;
 
@@ -136,31 +83,55 @@ static int printlock_w39_common(struct flashchip *flash, unsigned int offset)
 	return printlock_w39_tblwp(lock);
 }
 
-static int printlock_w39_fwh(struct flashchip *flash)
+int printlock_w39f010(struct flashctx *flash)
 {
-	unsigned int i, total_size = flash->total_size * 1024;
-	int ret = 0;
-	
-	/* Print lock status of the complete chip */
-	for (i = 0; i < total_size; i += flash->page_size)
-		ret |= printlock_w39_fwh_block(flash, i);
+	uint8_t lock;
+	int ret;
+
+	lock = w39_idmode_readb(flash, 0x00002);
+	msg_cdbg("Bottom boot block:\n");
+	ret = printlock_w39_single_bootblock(lock, 16);
+
+	lock = w39_idmode_readb(flash, 0x1fff2);
+	msg_cdbg("Top boot block:\n");
+	ret |= printlock_w39_single_bootblock(lock, 16);
 
 	return ret;
 }
 
-static int unlock_w39_fwh(struct flashchip *flash)
+int printlock_w39l010(struct flashctx *flash)
 {
-	unsigned int i, total_size = flash->total_size * 1024;
-	
-	/* Unlock the complete chip */
-	for (i = 0; i < total_size; i += flash->page_size)
-		if (unlock_w39_fwh_block(flash, i))
-			return -1;
+	uint8_t lock;
+	int ret;
 
-	return 0;
+	lock = w39_idmode_readb(flash, 0x00002);
+	msg_cdbg("Bottom boot block:\n");
+	ret = printlock_w39_single_bootblock(lock, 8);
+
+	lock = w39_idmode_readb(flash, 0x1fff2);
+	msg_cdbg("Top boot block:\n");
+	ret |= printlock_w39_single_bootblock(lock, 8);
+
+	return ret;
 }
 
-int printlock_w39l040(struct flashchip * flash)
+int printlock_w39l020(struct flashctx *flash)
+{
+	uint8_t lock;
+	int ret;
+
+	lock = w39_idmode_readb(flash, 0x00002);
+	msg_cdbg("Bottom boot block:\n");
+	ret = printlock_w39_bootblock_64k16k(lock);
+
+	lock = w39_idmode_readb(flash, 0x3fff2);
+	msg_cdbg("Top boot block:\n");
+	ret |= printlock_w39_bootblock_64k16k(lock);
+
+	return ret;
+}
+
+int printlock_w39l040(struct flashctx *flash)
 {
 	uint8_t lock;
 	int ret;
@@ -176,7 +147,7 @@ int printlock_w39l040(struct flashchip * flash)
 	return ret;
 }
 
-int printlock_w39v040a(struct flashchip *flash)
+int printlock_w39v040a(struct flashctx *flash)
 {
 	uint8_t lock;
 	int ret = 0;
@@ -194,64 +165,64 @@ int printlock_w39v040a(struct flashchip *flash)
 	return ret;
 }
 
-int printlock_w39v040b(struct flashchip *flash)
+int printlock_w39v040b(struct flashctx *flash)
 {
 	return printlock_w39_common(flash, 0x7fff2);
 }
 
-int printlock_w39v040c(struct flashchip *flash)
+int printlock_w39v040c(struct flashctx *flash)
 {
 	/* Typo in the datasheet? The other chips use 0x7fff2. */
 	return printlock_w39_common(flash, 0xfff2);
 }
 
-int printlock_w39v040fa(struct flashchip *flash)
+int printlock_w39v040fa(struct flashctx *flash)
 {
 	int ret = 0;
 
 	ret = printlock_w39v040a(flash);
-	ret |= printlock_w39_fwh(flash);
+	ret |= printlock_regspace2_uniform_64k(flash);
 
 	return ret;
 }
 
-int printlock_w39v040fb(struct flashchip *flash)
+int printlock_w39v040fb(struct flashctx *flash)
 {
 	int ret = 0;
 
 	ret = printlock_w39v040b(flash);
-	ret |= printlock_w39_fwh(flash);
+	ret |= printlock_regspace2_uniform_64k(flash);
 
 	return ret;
 }
 
-int printlock_w39v040fc(struct flashchip *flash)
+int printlock_w39v040fc(struct flashctx *flash)
 {
 	int ret = 0;
 
 	/* W39V040C and W39V040FC use different WP/TBL offsets. */
 	ret = printlock_w39_common(flash, 0x7fff2);
-	ret |= printlock_w39_fwh(flash);
+	ret |= printlock_regspace2_uniform_64k(flash);
 
 	return ret;
 }
 
-int printlock_w39v080a(struct flashchip *flash)
+int printlock_w39v080a(struct flashctx *flash)
 {
 	return printlock_w39_common(flash, 0xffff2);
 }
 
-int printlock_w39v080fa(struct flashchip *flash)
+int printlock_w39v080fa(struct flashctx *flash)
 {
 	int ret = 0;
 
 	ret = printlock_w39v080a(flash);
-	ret |= printlock_w39_fwh(flash);
+	ret |= printlock_regspace2_uniform_64k(flash);
 
 	return ret;
 }
 
-int printlock_w39v080fa_dual(struct flashchip *flash)
+int printlock_w39v080fa_dual(struct flashctx *flash)
 {
 	msg_cinfo("Block locking for W39V080FA in dual mode is "
 		  "undocumented.\n");
@@ -259,22 +230,10 @@ int printlock_w39v080fa_dual(struct flashchip *flash)
 	return -1;
 }
 
-int unlock_w39v040fb(struct flashchip *flash)
+int printlock_at49f(struct flashctx *flash)
 {
-	if (unlock_w39_fwh(flash))
-		return -1;
-	if (printlock_w39_common(flash, 0x7fff2))
-		return -1;
-
-	return 0;
-}
-
-int unlock_w39v080fa(struct flashchip *flash)
-{
-	if (unlock_w39_fwh(flash))
-		return -1;
-	if (printlock_w39_common(flash, 0xffff2))
-		return -1;
-
+	uint8_t lock = w39_idmode_readb(flash, 0x00002);
+	msg_cdbg("Hardware bootblock lockout is %sactive.\n",
+		 (lock & 0x01) ? "" : "not ");
 	return 0;
 }

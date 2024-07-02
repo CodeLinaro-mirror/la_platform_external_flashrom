@@ -14,24 +14,21 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
  */
 
 /* Adapted from the Intel FW hub stuff for 82802ax parts. */
 
 #include "flash.h"
+#include "chipdrivers.h"
 
-static int check_sst_fwhub_block_lock(struct flashchip *flash, int offset)
+static int check_sst_fwhub_block_lock(struct flashctx *flash, unsigned int offset)
 {
 	chipaddr registers = flash->virtual_registers;
 	uint8_t blockstatus;
 
-	blockstatus = chip_readb(registers + offset + 2);
+	blockstatus = chip_readb(flash, registers + offset + 2);
 	msg_cdbg("Lock status for 0x%06x (size 0x%06x) is %02x, ",
-		     offset, flash->page_size, blockstatus);
+		     offset, flash->chip->page_size, blockstatus);
 	switch (blockstatus & 0x3) {
 	case 0x0:
 		msg_cdbg("full access\n");
@@ -50,7 +47,7 @@ static int check_sst_fwhub_block_lock(struct flashchip *flash, int offset)
 	return blockstatus & 0x1;
 }
 
-static int clear_sst_fwhub_block_lock(struct flashchip *flash, int offset)
+static int clear_sst_fwhub_block_lock(struct flashctx *flash, unsigned int offset)
 {
 	chipaddr registers = flash->virtual_registers;
 	uint8_t blockstatus;
@@ -59,7 +56,7 @@ static int clear_sst_fwhub_block_lock(struct flashchip *flash, int offset)
 
 	if (blockstatus) {
 		msg_cdbg("Trying to clear lock for 0x%06x... ", offset);
-		chip_writeb(0, registers + offset + 2);
+		chip_writeb(flash, 0, registers + offset + 2);
 
 		blockstatus = check_sst_fwhub_block_lock(flash, offset);
 		msg_cdbg("%s\n", (blockstatus) ? "failed" : "OK");
@@ -68,28 +65,28 @@ static int clear_sst_fwhub_block_lock(struct flashchip *flash, int offset)
 	return blockstatus;
 }
 
-int printlock_sst_fwhub(struct flashchip *flash)
+int printlock_sst_fwhub(struct flashctx *flash)
 {
-	int i;
+	unsigned int i;
 
-	for (i = 0; i < flash->total_size * 1024; i += flash->page_size)
+	for (i = 0; i < flash->chip->total_size * 1024; i += flash->chip->page_size)
 		check_sst_fwhub_block_lock(flash, i);
 
 	return 0;
 }
 
-int unlock_sst_fwhub(struct flashchip *flash)
+int unlock_sst_fwhub(struct flashctx *flash)
 {
-	int i, ret=0;
+	unsigned int i;
+	int ret = 0;
 
-	for (i = 0; i < flash->total_size * 1024; i += flash->page_size)
+	for (i = 0; i < flash->chip->total_size * 1024; i += flash->chip->page_size)
 	{
 		if (clear_sst_fwhub_block_lock(flash, i))
 		{
-			msg_cdbg("Warning: Unlock Failed for block 0x%06x\n", i);
+			msg_cwarn("Warning: Unlock Failed for block 0x%06x\n", i);
 			ret++;
 		}
 	}
 	return ret;
 }
-
