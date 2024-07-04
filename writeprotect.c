@@ -13,2045 +13,615 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
  */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "flash.h"
-#include "flashchips.h"
-#include "chipdrivers.h"
 #include "spi.h"
+#include "flash.h"
+#include "libflashrom.h"
+#include "chipdrivers.h"
 #include "writeprotect.h"
+#include "programmer.h"
 
 /*
- * The following procedures rely on look-up tables to match the user-specified
- * range with the chip's supported ranges. This turned out to be the most
- * elegant approach since diferent flash chips use different levels of
- * granularity and methods to determine protected ranges. In other words,
- * be stupid and simple since clever arithmetic will not work for many chips.
+ * Allow specialisation in opaque masters, such as ichspi hwseq, to r/w to status registers.
  */
+static int wp_write_register(const struct flashctx *flash, enum flash_reg reg, uint8_t value)
+{
+	int ret;
+	if ((flash->mst->buses_supported & BUS_PROG) && flash->mst->opaque.write_register) {
+		ret = flash->mst->opaque.write_register(flash, reg, value);
+	} else {
+		ret = spi_write_register(flash, reg, value);
+	}
 
-struct wp_range {
-	unsigned int start;	/* starting address */
-	unsigned int len;	/* len */
-};
+	/* Writing SR1 should always be supported, ignore errors for other registers. */
+	if (ret == SPI_INVALID_OPCODE && reg != STATUS1) {
+		msg_pdbg("%s: write to register %d not supported by programmer, ignoring.\n", __func__, reg);
+		ret = 0;
+	}
+	return ret;
+}
 
-enum bit_state {
-	OFF	= 0,
-	ON	= 1,
-	X	= -1	/* don't care. Must be bigger than max # of bp. */
-};
+static int wp_read_register(const struct flashctx *flash, enum flash_reg reg, uint8_t *value)
+{
+	int ret;
+	if ((flash->mst->buses_supported & BUS_PROG) && flash->mst->opaque.read_register) {
+		ret = flash->mst->opaque.read_register(flash, reg, value);
+	} else {
+		ret = spi_read_register(flash, reg, value);
+	}
 
-/*
- * Generic write-protection schema for 25-series SPI flash chips. This assumes
- * there is a status register that contains one or more consecutive bits which
- * determine which address range is protected.
- */
+	/* Reading SR1 should always be supported, ignore errors for other registers. */
+	if (ret == SPI_INVALID_OPCODE && reg != STATUS1) {
+		msg_pdbg("%s: read from register %d not is supported by programmer, "
+			  "writeprotect operations will assume it contains 0x00.\n", __func__, reg);
+		*value = 0;
+		ret = 0;
+	}
+	return ret;
+}
 
-struct status_register_layout {
-	int bp0_pos;	/* position of BP0 */
-	int bp_bits;	/* number of block protect bits */
-	int srp_pos;	/* position of status register protect enable bit */
-};
+/** Read and extract a single bit from the chip's registers */
+static enum flashrom_wp_result read_bit(uint8_t *value, bool *present, struct flashctx *flash, struct reg_bit_info bit)
+{
+	*present = bit.reg != INVALID_REG;
+	if (*present) {
+		if (wp_read_register(flash, bit.reg, value))
+			return FLASHROM_WP_ERR_READ_FAILED;
+		*value = (*value >> bit.bit_index) & 1;
+	} else {
+		/* Zero bit, it may be used by compare_ranges(). */
+		*value = 0;
+	}
 
-struct generic_range {
-	struct generic_modifier_bits m;
-	unsigned int bp;		/* block protect bitfield */
+	return FLASHROM_WP_OK;
+}
+
+/** Read all WP configuration bits from the chip's registers. */
+static enum flashrom_wp_result read_wp_bits(struct wp_bits *bits, struct flashctx *flash)
+{
+	/*
+	 * For each WP bit that is included in the chip's register layout, read
+	 * the register that contains it, extracts the bit's value, and assign
+	 * it to the appropriate field in the wp_bits structure.
+	 */
+	const struct reg_bit_map *bit_map = &flash->chip->reg_bits;
+	bool ignored;
+	size_t i;
+	enum flashrom_wp_result ret;
+
+	/*
+	 * Write protection select bit (WPS) controls kind of write protection
+	 * that is used by the chip. When set, BP bits are ignored and each
+	 * block/sector has its own WP bit managed by special commands. When
+	 * the bit is set and we can't change it, just bail out until
+	 * implementation is extended to handle this kind of WP.
+	 */
+	if (bit_map->wps.reg != INVALID_REG && bit_map->wps.writability != RW) {
+		bool wps_bit_present;
+		uint8_t wps;
+
+		ret = read_bit(&wps, &wps_bit_present, flash, bit_map->wps);
+		if (ret != FLASHROM_WP_OK)
+			return ret;
+
+		if (wps_bit_present && wps)
+			return FLASHROM_WP_ERR_UNSUPPORTED_STATE;
+	}
+
+	ret = read_bit(&bits->tb,  &bits->tb_bit_present,  flash, bit_map->tb);
+	if (ret != FLASHROM_WP_OK)
+		return ret;
+
+	ret = read_bit(&bits->sec, &bits->sec_bit_present, flash, bit_map->sec);
+	if (ret != FLASHROM_WP_OK)
+		return ret;
+
+	ret = read_bit(&bits->cmp, &bits->cmp_bit_present, flash, bit_map->cmp);
+	if (ret != FLASHROM_WP_OK)
+		return ret;
+
+	ret = read_bit(&bits->srp, &bits->srp_bit_present, flash, bit_map->srp);
+	if (ret != FLASHROM_WP_OK)
+		return ret;
+
+	ret = read_bit(&bits->srl, &bits->srl_bit_present, flash, bit_map->srl);
+	if (ret != FLASHROM_WP_OK)
+		return ret;
+
+	for (i = 0; i < ARRAY_SIZE(bits->bp); i++) {
+		if (bit_map->bp[i].reg == INVALID_REG)
+			break;
+
+		bits->bp_bit_count = i + 1;
+		ret = read_bit(&bits->bp[i], &ignored, flash, bit_map->bp[i]);
+		if (ret != FLASHROM_WP_OK)
+			return ret;
+	}
+
+	return ret;
+}
+
+/** Helper function for get_wp_bits_reg_values(). */
+static void set_reg_bit(
+		uint8_t *reg_values, uint8_t *bit_masks, uint8_t *write_masks,
+		struct reg_bit_info bit, uint8_t value)
+{
+	if (bit.reg != INVALID_REG) {
+		reg_values[bit.reg] |= value << bit.bit_index;
+		bit_masks[bit.reg] |= 1 << bit.bit_index;
+
+		/* Avoid RO and OTP bits causing a register update */
+		if (bit.writability == RW)
+			write_masks[bit.reg] |= 1 << bit.bit_index;
+	}
+}
+
+/** Convert wp_bits to register values and write masks */
+static void get_wp_bits_reg_values(
+		uint8_t *reg_values, uint8_t *bit_masks, uint8_t *write_masks,
+		const struct reg_bit_map *reg_bits, struct wp_bits bits)
+{
+	memset(reg_values, 0, sizeof(uint8_t) * MAX_REGISTERS);
+	memset(bit_masks, 0, sizeof(uint8_t) * MAX_REGISTERS);
+	memset(write_masks, 0, sizeof(uint8_t) * MAX_REGISTERS);
+
+	for (size_t i = 0; i < bits.bp_bit_count; i++)
+		set_reg_bit(reg_values, bit_masks, write_masks, reg_bits->bp[i], bits.bp[i]);
+
+	set_reg_bit(reg_values, bit_masks, write_masks, reg_bits->tb,  bits.tb);
+	set_reg_bit(reg_values, bit_masks, write_masks, reg_bits->sec, bits.sec);
+	set_reg_bit(reg_values, bit_masks, write_masks, reg_bits->cmp, bits.cmp);
+	set_reg_bit(reg_values, bit_masks, write_masks, reg_bits->srp, bits.srp);
+	set_reg_bit(reg_values, bit_masks, write_masks, reg_bits->srl, bits.srl);
+	/* Note: always setting WPS bit to zero until its fully supported. */
+	set_reg_bit(reg_values, bit_masks, write_masks, reg_bits->wps, 0);
+}
+
+/** Write WP configuration bits to the flash's registers. */
+static enum flashrom_wp_result write_wp_bits(struct flashctx *flash, struct wp_bits bits)
+{
+	uint8_t reg_values[MAX_REGISTERS];
+	uint8_t bit_masks[MAX_REGISTERS];	/* masks of valid bits */
+	uint8_t write_masks[MAX_REGISTERS];	/* masks of written bits */
+	get_wp_bits_reg_values(reg_values, bit_masks, write_masks, &flash->chip->reg_bits, bits);
+
+	/* Write each register whose value was updated */
+	for (enum flash_reg reg = STATUS1; reg < MAX_REGISTERS; reg++) {
+		if (!write_masks[reg])
+			continue;
+
+		uint8_t value;
+		if (wp_read_register(flash, reg, &value))
+			return FLASHROM_WP_ERR_READ_FAILED;
+
+		/* Skip unnecessary register writes */
+		uint8_t actual = value & write_masks[reg];
+		uint8_t expected = reg_values[reg] & write_masks[reg];
+		if (actual == expected)
+			continue;
+
+		value = (value & ~write_masks[reg]) | expected;
+
+		if (wp_write_register(flash, reg, value))
+			return FLASHROM_WP_ERR_WRITE_FAILED;
+	}
+
+	enum flashrom_wp_result ret = FLASHROM_WP_OK;
+	/* Verify each register even if write to it was skipped */
+	for (enum flash_reg reg = STATUS1; reg < MAX_REGISTERS; reg++) {
+		if (!bit_masks[reg])
+			continue;
+
+		uint8_t value;
+		if (wp_read_register(flash, reg, &value))
+			return FLASHROM_WP_ERR_READ_FAILED;
+
+		msg_cdbg2("%s: wp_verify reg:%u value:0x%x\n", __func__, reg, value);
+		uint8_t actual = value & bit_masks[reg];
+		uint8_t expected = reg_values[reg] & bit_masks[reg];
+
+		if (actual != expected) {
+			msg_cdbg("%s: wp_verify failed: reg:%u actual:0x%x expected:0x%x\n",
+				 __func__, reg, actual, expected);
+			ret = FLASHROM_WP_ERR_VERIFY_FAILED;
+		}
+	}
+
+	return ret;
+}
+
+static decode_range_func_t *lookup_decode_range_func_ptr(const struct flashchip *chip)
+{
+	switch (chip->decode_range) {
+		case DECODE_RANGE_SPI25: return &decode_range_spi25;
+		case DECODE_RANGE_SPI25_64K_BLOCK: return &decode_range_spi25_64k_block;
+		case DECODE_RANGE_SPI25_BIT_CMP: return &decode_range_spi25_bit_cmp;
+		case DECODE_RANGE_SPI25_2X_BLOCK: return &decode_range_spi25_2x_block;
+	/* default: total function, 0 indicates no decode range function set. */
+		case NO_DECODE_RANGE_FUNC: return NULL;
+	};
+
+	return NULL;
+}
+
+
+/** Get the range selected by a WP configuration. */
+static enum flashrom_wp_result get_wp_range(struct wp_range *range, struct flashctx *flash, const struct wp_bits *bits)
+{
+	decode_range_func_t *decode_range = lookup_decode_range_func_ptr(flash->chip);
+	if (decode_range == NULL)
+		return FLASHROM_WP_ERR_OTHER;
+
+	decode_range(&range->start, &range->len, bits, flashrom_flash_getsize(flash));
+	return FLASHROM_WP_OK;
+}
+
+/** Write protect bit values and the range they will activate. */
+struct wp_range_and_bits {
+	struct wp_bits bits;
 	struct wp_range range;
 };
 
-struct generic_wp {
-	struct status_register_layout sr1;	/* status register 1 */
-	struct generic_range *ranges;
+/**
+ * Comparator used for sorting ranges in get_ranges_and_wp_bits().
+ *
+ * Ranges are ordered by these attributes, in decreasing significance:
+ *   (range length, range start, cmp bit, sec bit, tb bit, bp bits)
+ */
+static int compare_ranges(const void *aa, const void *bb)
+{
+	const struct wp_range_and_bits
+		*a = (const struct wp_range_and_bits *)aa,
+		*b = (const struct wp_range_and_bits *)bb;
 
+	int ord = 0;
+
+	if (ord == 0)
+		ord = a->range.len - b->range.len;
+
+	if (ord == 0)
+		ord = a->range.start - b->range.start;
+
+	if (ord == 0)
+		ord = a->bits.cmp - b->bits.cmp;
+
+	if (ord == 0)
+		ord = a->bits.sec - b->bits.sec;
+
+	if (ord == 0)
+		ord = a->bits.tb  - b->bits.tb;
+
+	for (int i = a->bits.bp_bit_count - 1; i >= 0; i--) {
+		if (ord == 0)
+			ord = a->bits.bp[i] - b->bits.bp[i];
+	}
+
+	return ord;
+}
+
+static bool can_write_bit(const struct reg_bit_info bit)
+{
 	/*
-	 * Some chips store modifier bits in one or more special control
-	 * registers instead of the status register like many older SPI NOR
-	 * flash chips did. get_modifier_bits() and set_modifier_bits() will do
-	 * any chip-specific operations necessary to get/set these bit values.
+	 * TODO: check if the programmer supports writing the register that the
+	 * bit is in. For example, some chipsets may only allow SR1 to be
+	 * written.
 	 */
-	int (*get_modifier_bits)(const struct flashchip *flash,
-			struct generic_modifier_bits *m);
-	int (*set_modifier_bits)(const struct flashchip *flash,
-			struct generic_modifier_bits *m);
-};
 
-/*
- * The following ranges and functions are useful for representing Winbond-
- * style writeprotect schema in which there are typically 5 bits of
- * relevant information stored in status register 1:
- * sec: This bit indicates the units (sectors vs. blocks)
- * tb: The top-bottom bit indicates if the affected range is at the top of
- *     the flash memory's address space or at the bottom.
- * bp[2:0]: The number of affected sectors/blocks.
+	return bit.reg != INVALID_REG && bit.writability == RW;
+}
+
+/**
+ * Enumerate all protection ranges that the chip supports and that are able to
+ * be activated, given limitations such as OTP bits or programmer-enforced
+ * restrictions. Returns a list of deduplicated wp_range_and_bits structures.
+ *
+ * Allocates a buffer that must be freed by the caller with free().
  */
-struct w25q_range {
-	enum bit_state sec;		/* if 1, bp[2:0] describe sectors */
-	enum bit_state tb;		/* top/bottom select */
-	int bp;				/* block protect bitfield */
-	struct wp_range range;
-};
-
-/*
- * Mask to extract write-protect enable and range bits
- *   Status register 1:
- *     SRP0:           bit 7
- *     range(BP2-BP0): bit 4-2
- *   Status register 2:
- *     SRP1:           bit 1
- */
-#define MASK_WP_AREA (0x9C)
-#define MASK_WP2_AREA (0x01)
-
-struct w25q_range en25f40_ranges[] = {
-	{ X, X, 0, {0, 0} },    /* none */
-	{ 0, 0, 0x1, {0x000000, 504 * 1024} },
-	{ 0, 0, 0x2, {0x000000, 496 * 1024} },
-	{ 0, 0, 0x3, {0x000000, 480 * 1024} },
-	{ 0, 0, 0x4, {0x000000, 448 * 1024} },
-	{ 0, 0, 0x5, {0x000000, 384 * 1024} },
-	{ 0, 0, 0x6, {0x000000, 256 * 1024} },
-	{ 0, 0, 0x7, {0x000000, 512 * 1024} },
-};
-
-struct w25q_range en25q40_ranges[] = {
-	{ 0, 0, 0, {0, 0} },    /* none */
-	{ 0, 0, 0x1, {0x000000, 504 * 1024} },
-	{ 0, 0, 0x2, {0x000000, 496 * 1024} },
-	{ 0, 0, 0x3, {0x000000, 480 * 1024} },
-
-	{ 0, 1, 0x0, {0x000000, 448 * 1024} },
-	{ 0, 1, 0x1, {0x000000, 384 * 1024} },
-	{ 0, 1, 0x2, {0x000000, 256 * 1024} },
-	{ 0, 1, 0x3, {0x000000, 512 * 1024} },
-};
-
-struct w25q_range en25q80_ranges[] = {
-	{ 0, 0, 0, {0, 0} },    /* none */
-	{ 0, 0, 0x1, {0x000000, 1016 * 1024} },
-	{ 0, 0, 0x2, {0x000000, 1008 * 1024} },
-	{ 0, 0, 0x3, {0x000000, 992 * 1024} },
-	{ 0, 0, 0x4, {0x000000, 960 * 1024} },
-	{ 0, 0, 0x5, {0x000000, 896 * 1024} },
-	{ 0, 0, 0x6, {0x000000, 768 * 1024} },
-	{ 0, 0, 0x7, {0x000000, 1024 * 1024} },
-};
-
-struct w25q_range en25q32_ranges[] = {
-	{ 0, 0, 0, {0, 0} },    /* none */
-	{ 0, 0, 0x1, {0x000000, 4032 * 1024} },
-	{ 0, 0, 0x2, {0x000000, 3968 * 1024} },
-	{ 0, 0, 0x3, {0x000000, 3840 * 1024} },
-	{ 0, 0, 0x4, {0x000000, 3584 * 1024} },
-	{ 0, 0, 0x5, {0x000000, 3072 * 1024} },
-	{ 0, 0, 0x6, {0x000000, 2048 * 1024} },
-	{ 0, 0, 0x7, {0x000000, 4096 * 1024} },
-
-	{ 0, 1, 0, {0, 0} },    /* none */
-	{ 0, 1, 0x1, {0x010000, 4032 * 1024} },
-	{ 0, 1, 0x2, {0x020000, 3968 * 1024} },
-	{ 0, 1, 0x3, {0x040000, 3840 * 1024} },
-	{ 0, 1, 0x4, {0x080000, 3584 * 1024} },
-	{ 0, 1, 0x5, {0x100000, 3072 * 1024} },
-	{ 0, 1, 0x6, {0x200000, 2048 * 1024} },
-	{ 0, 1, 0x7, {0x000000, 4096 * 1024} },
-};
-
-struct w25q_range en25q64_ranges[] = {
-	{ 0, 0, 0, {0, 0} },    /* none */
-	{ 0, 0, 0x1, {0x000000, 8128 * 1024} },
-	{ 0, 0, 0x2, {0x000000, 8064 * 1024} },
-	{ 0, 0, 0x3, {0x000000, 7936 * 1024} },
-	{ 0, 0, 0x4, {0x000000, 7680 * 1024} },
-	{ 0, 0, 0x5, {0x000000, 7168 * 1024} },
-	{ 0, 0, 0x6, {0x000000, 6144 * 1024} },
-	{ 0, 0, 0x7, {0x000000, 8192 * 1024} },
-
-	{ 0, 1, 0, {0, 0} },	/* none */
-	{ 0, 1, 0x1, {0x010000, 8128 * 1024} },
-	{ 0, 1, 0x2, {0x020000, 8064 * 1024} },
-	{ 0, 1, 0x3, {0x040000, 7936 * 1024} },
-	{ 0, 1, 0x4, {0x080000, 7680 * 1024} },
-	{ 0, 1, 0x5, {0x100000, 7168 * 1024} },
-	{ 0, 1, 0x6, {0x200000, 6144 * 1024} },
-	{ 0, 1, 0x7, {0x000000, 8192 * 1024} },
-};
-
-struct w25q_range en25q128_ranges[] = {
-	{ 0, 0, 0, {0, 0} },    /* none */
-	{ 0, 0, 0x1, {0x000000, 16320 * 1024} },
-	{ 0, 0, 0x2, {0x000000, 16256 * 1024} },
-	{ 0, 0, 0x3, {0x000000, 16128 * 1024} },
-	{ 0, 0, 0x4, {0x000000, 15872 * 1024} },
-	{ 0, 0, 0x5, {0x000000, 15360 * 1024} },
-	{ 0, 0, 0x6, {0x000000, 14336 * 1024} },
-	{ 0, 0, 0x7, {0x000000, 16384 * 1024} },
-
-	{ 0, 1, 0, {0, 0} },	/* none */
-	{ 0, 1, 0x1, {0x010000, 16320 * 1024} },
-	{ 0, 1, 0x2, {0x020000, 16256 * 1024} },
-	{ 0, 1, 0x3, {0x040000, 16128 * 1024} },
-	{ 0, 1, 0x4, {0x080000, 15872 * 1024} },
-	{ 0, 1, 0x5, {0x100000, 15360 * 1024} },
-	{ 0, 1, 0x6, {0x200000, 14336 * 1024} },
-	{ 0, 1, 0x7, {0x000000, 16384 * 1024} },
-};
-
-struct w25q_range en25s64_ranges[] = {
-	{ 0, 0, 0, {0, 0} },    /* none */
-	{ 0, 0, 0x1, {0x000000, 8064 * 1024} },
-	{ 0, 0, 0x2, {0x000000, 7936 * 1024} },
-	{ 0, 0, 0x3, {0x000000, 7680 * 1024} },
-	{ 0, 0, 0x4, {0x000000, 7168 * 1024} },
-	{ 0, 0, 0x5, {0x000000, 6144 * 1024} },
-	{ 0, 0, 0x6, {0x000000, 4096 * 1024} },
-	{ 0, 0, 0x7, {0x000000, 8192 * 1024} },
-
-	{ 0, 1, 0, {0, 0} },	/* none */
-	{ 0, 1, 0x1, {0x7e0000, 128 * 1024} },
-	{ 0, 1, 0x2, {0x7c0000, 256 * 1024} },
-	{ 0, 1, 0x3, {0x780000, 512 * 1024} },
-	{ 0, 1, 0x4, {0x700000, 1024 * 1024} },
-	{ 0, 1, 0x5, {0x600000, 2048 * 1024} },
-	{ 0, 1, 0x6, {0x400000, 4096 * 1024} },
-	{ 0, 1, 0x7, {0x000000, 8192 * 1024} },
-};
-
-/* mx25l1005 ranges also work for the mx25l1005c */
-static struct w25q_range mx25l1005_ranges[] = {
-	{ X, X, 0, {0, 0} },	/* none */
-	{ X, X, 0x1, {0x010000, 64 * 1024} },
-	{ X, X, 0x2, {0x000000, 128 * 1024} },
-	{ X, X, 0x3, {0x000000, 128 * 1024} },
-};
-
-static struct w25q_range mx25l2005_ranges[] = {
-	{ X, X, 0, {0, 0} },	/* none */
-	{ X, X, 0x1, {0x030000, 64 * 1024} },
-	{ X, X, 0x2, {0x020000, 128 * 1024} },
-	{ X, X, 0x3, {0x000000, 256 * 1024} },
-};
-
-static struct w25q_range mx25l4005_ranges[] = {
-	{ X, X, 0, {0, 0} },	/* none */
-	{ X, X, 0x1, {0x070000, 64 * 1 * 1024} },	/* block 7 */
-	{ X, X, 0x2, {0x060000, 64 * 2 * 1024} },	/* blocks 6-7 */
-	{ X, X, 0x3, {0x040000, 64 * 4 * 1024} },	/* blocks 4-7 */
-	{ X, X, 0x4, {0x000000, 512 * 1024} },
-	{ X, X, 0x5, {0x000000, 512 * 1024} },
-	{ X, X, 0x6, {0x000000, 512 * 1024} },
-	{ X, X, 0x7, {0x000000, 512 * 1024} },
-};
-
-static struct w25q_range mx25l8005_ranges[] = {
-	{ X, X, 0, {0, 0} },	/* none */
-	{ X, X, 0x1, {0x0f0000, 64 * 1 * 1024} },	/* block 15 */
-	{ X, X, 0x2, {0x0e0000, 64 * 2 * 1024} },	/* blocks 14-15 */
-	{ X, X, 0x3, {0x0c0000, 64 * 4 * 1024} },	/* blocks 12-15 */
-	{ X, X, 0x4, {0x080000, 64 * 8 * 1024} },	/* blocks 8-15 */
-	{ X, X, 0x5, {0x000000, 1024 * 1024} },
-	{ X, X, 0x6, {0x000000, 1024 * 1024} },
-	{ X, X, 0x7, {0x000000, 1024 * 1024} },
-};
-
-#if 0
-/* FIXME: mx25l1605 has the same IDs as the mx25l1605d */
-static struct w25q_range mx25l1605_ranges[] = {
-	{ X, X, 0, {0, 0} },	/* none */
-	{ X, X, 0x1, {0x1f0000, 64 * 1024} },	/* block 31 */
-	{ X, X, 0x2, {0x1e0000, 128 * 1024} },	/* blocks 30-31 */
-	{ X, X, 0x3, {0x1c0000, 256 * 1024} },	/* blocks 28-31 */
-	{ X, X, 0x4, {0x180000, 512 * 1024} },	/* blocks 24-31 */
-	{ X, X, 0x4, {0x100000, 1024 * 1024} },	/* blocks 16-31 */
-	{ X, X, 0x6, {0x000000, 2048 * 1024} },
-	{ X, X, 0x7, {0x000000, 2048 * 1024} },
-};
-#endif
-
-#if 0
-/* FIXME: mx25l6405 has the same IDs as the mx25l6405d */
-static struct w25q_range mx25l6405_ranges[] = {
-	{ X, 0, 0, {0, 0} },	/* none */
-	{ X, 0, 0x1, {0x7f0000, 64 * 1 * 1024} },	/* block 127 */
-	{ X, 0, 0x2, {0x7e0000, 64 * 2 * 1024} },	/* blocks 126-127 */
-	{ X, 0, 0x3, {0x7c0000, 64 * 4 * 1024} },	/* blocks 124-127 */
-	{ X, 0, 0x4, {0x780000, 64 * 8 * 1024} },	/* blocks 120-127 */
-	{ X, 0, 0x5, {0x700000, 64 * 16 * 1024} },	/* blocks 112-127 */
-	{ X, 0, 0x6, {0x600000, 64 * 32 * 1024} },	/* blocks 96-127 */
-	{ X, 0, 0x7, {0x400000, 64 * 64 * 1024} },	/* blocks 64-127 */
-
-	{ X, 1, 0x0, {0x000000, 8192 * 1024} },
-	{ X, 1, 0x1, {0x000000, 8192 * 1024} },
-	{ X, 1, 0x2, {0x000000, 8192 * 1024} },
-	{ X, 1, 0x3, {0x000000, 8192 * 1024} },
-	{ X, 1, 0x4, {0x000000, 8192 * 1024} },
-	{ X, 1, 0x5, {0x000000, 8192 * 1024} },
-	{ X, 1, 0x6, {0x000000, 8192 * 1024} },
-	{ X, 1, 0x7, {0x000000, 8192 * 1024} },
-};
-#endif
-
-static struct w25q_range mx25l1605d_ranges[] = {
-	{ X, 0, 0, {0, 0} },	/* none */
-	{ X, 0, 0x1, {0x1f0000, 64 * 1 * 1024} },	/* block 31 */
-	{ X, 0, 0x2, {0x1e0000, 64 * 2 * 1024} },	/* blocks 30-31 */
-	{ X, 0, 0x3, {0x1c0000, 64 * 4 * 1024} },	/* blocks 28-31 */
-	{ X, 0, 0x4, {0x180000, 64 * 8 * 1024} },	/* blocks 24-31 */
-	{ X, 0, 0x5, {0x100000, 64 * 16 * 1024} },	/* blocks 16-31 */
-	{ X, 0, 0x6, {0x000000, 64 * 32 * 1024} },	/* blocks 0-31 */
-	{ X, 0, 0x7, {0x000000, 64 * 32 * 1024} },	/* blocks 0-31 */
-
-	{ X, 1, 0x0, {0x000000, 2048 * 1024} },
-	{ X, 1, 0x1, {0x000000, 2048 * 1024} },
-	{ X, 1, 0x2, {0x000000, 64 * 16 * 1024} },	/* blocks 0-15 */
-	{ X, 1, 0x3, {0x000000, 64 * 24 * 1024} },	/* blocks 0-23 */
-	{ X, 1, 0x4, {0x000000, 64 * 28 * 1024} },	/* blocks 0-27 */
-	{ X, 1, 0x5, {0x000000, 64 * 30 * 1024} },	/* blocks 0-29 */
-	{ X, 1, 0x6, {0x000000, 64 * 31 * 1024} },	/* blocks 0-30 */
-	{ X, 1, 0x7, {0x000000, 64 * 32 * 1024} },	/* blocks 0-31 */
-};
-
-/* FIXME: Is there an mx25l3205 (without a trailing letter)? */
-static struct w25q_range mx25l3205d_ranges[] = {
-	{ X, 0, 0, {0, 0} },	/* none */
-	{ X, 0, 0x1, {0x3f0000, 64 * 1024} },
-	{ X, 0, 0x2, {0x3e0000, 128 * 1024} },
-	{ X, 0, 0x3, {0x3c0000, 256 * 1024} },
-	{ X, 0, 0x4, {0x380000, 512 * 1024} },
-	{ X, 0, 0x5, {0x300000, 1024 * 1024} },
-	{ X, 0, 0x6, {0x200000, 2048 * 1024} },
-	{ X, 0, 0x7, {0x000000, 4096 * 1024} },
-
-	{ X, 1, 0x0, {0x000000, 4096 * 1024} },
-	{ X, 1, 0x1, {0x000000, 2048 * 1024} },
-	{ X, 1, 0x2, {0x000000, 3072 * 1024} },
-	{ X, 1, 0x3, {0x000000, 3584 * 1024} },
-	{ X, 1, 0x4, {0x000000, 3840 * 1024} },
-	{ X, 1, 0x5, {0x000000, 3968 * 1024} },
-	{ X, 1, 0x6, {0x000000, 4032 * 1024} },
-	{ X, 1, 0x7, {0x000000, 4096 * 1024} },
-};
-
-static struct w25q_range mx25u3235e_ranges[] = {
-	{ X, 0, 0, {0, 0} },	/* none */
-	{ 0, 0, 0x1, {0x3f0000, 64 * 1024} },
-	{ 0, 0, 0x2, {0x3e0000, 128 * 1024} },
-	{ 0, 0, 0x3, {0x3c0000, 256 * 1024} },
-	{ 0, 0, 0x4, {0x380000, 512 * 1024} },
-	{ 0, 0, 0x5, {0x300000, 1024 * 1024} },
-	{ 0, 0, 0x6, {0x200000, 2048 * 1024} },
-	{ 0, 0, 0x7, {0x000000, 4096 * 1024} },
-
-	{ 0, 1, 0x0, {0x000000, 4096 * 1024} },
-	{ 0, 1, 0x1, {0x000000, 2048 * 1024} },
-	{ 0, 1, 0x2, {0x000000, 3072 * 1024} },
-	{ 0, 1, 0x3, {0x000000, 3584 * 1024} },
-	{ 0, 1, 0x4, {0x000000, 3840 * 1024} },
-	{ 0, 1, 0x5, {0x000000, 3968 * 1024} },
-	{ 0, 1, 0x6, {0x000000, 4032 * 1024} },
-	{ 0, 1, 0x7, {0x000000, 4096 * 1024} },
-};
-
-static struct w25q_range mx25u6435e_ranges[] = {
-	{ X, 0, 0, {0, 0} },	/* none */
-	{ 0, 0, 0x1, {0x7f0000,   1 * 64 * 1024} },	/* block 127 */
-	{ 0, 0, 0x2, {0x7e0000,   2 * 64 * 1024} },	/* blocks 126-127 */
-	{ 0, 0, 0x3, {0x7c0000,   4 * 64 * 1024} },	/* blocks 124-127 */
-	{ 0, 0, 0x4, {0x780000,   8 * 64 * 1024} },	/* blocks 120-127 */
-	{ 0, 0, 0x5, {0x700000,  16 * 64 * 1024} },	/* blocks 112-127 */
-	{ 0, 0, 0x6, {0x600000,  32 * 64 * 1024} },	/* blocks 96-127 */
-	{ 0, 0, 0x7, {0x400000,  64 * 64 * 1024} },	/* blocks 64-127 */
-
-	{ 0, 1, 0x0, {0x000000,  64 * 64 * 1024} },	/* blocks 0-63 */
-	{ 0, 1, 0x1, {0x000000,  96 * 64 * 1024} },	/* blocks 0-95 */
-	{ 0, 1, 0x2, {0x000000, 112 * 64 * 1024} },	/* blocks 0-111 */
-	{ 0, 1, 0x3, {0x000000, 120 * 64 * 1024} },	/* blocks 0-119 */
-	{ 0, 1, 0x4, {0x000000, 124 * 64 * 1024} },	/* blocks 0-123 */
-	{ 0, 1, 0x5, {0x000000, 126 * 64 * 1024} },	/* blocks 0-125 */
-	{ 0, 1, 0x6, {0x000000, 127 * 64 * 1024} },	/* blocks 0-126 */
-	{ 0, 1, 0x7, {0x000000, 128 * 64 * 1024} },	/* blocks 0-127 */
-};
-
-static struct w25q_range n25q064_ranges[] = {
+static enum flashrom_wp_result get_ranges_and_wp_bits(struct flashctx *flash, struct wp_bits bits, struct wp_range_and_bits **ranges, size_t *count)
+{
+	const struct reg_bit_map *reg_bits = &flash->chip->reg_bits;
 	/*
-	 * Note: For N25Q064, sec (usually in bit position 6) is called BP3
-	 * (block protect bit 3). It is only useful when all blocks are to
-	 * be write-protected.
+	 * Create a list of bits that affect the chip's protection range in
+	 * range_bits. Each element is a pointer to a member of the wp_bits
+	 * structure that will be modified.
+	 *
+	 * Some chips have range bits that cannot be changed (e.g. MX25L6473E
+	 * has a one-time programmable TB bit). Rather than enumerating all
+	 * possible values for unwritable bits, just read their values from the
+	 * chip to ensure we only enumerate ranges that are actually available.
 	 */
-	{ 0, 0, 0, {0, 0} },	/* none */
+	uint8_t *range_bits[ARRAY_SIZE(bits.bp) + 1 /* TB */ + 1 /* SEC */ + 1 /* CMP */];
+	size_t bit_count = 0;
 
-	{ 0, 0, 0x1, {0x7f0000,       64 * 1024} },	/* block 127 */
-	{ 0, 0, 0x2, {0x7e0000,   2 * 64 * 1024} },	/* blocks 126-127 */
-	{ 0, 0, 0x3, {0x7c0000,   4 * 64 * 1024} },	/* blocks 124-127 */
-	{ 0, 0, 0x4, {0x780000,   8 * 64 * 1024} },	/* blocks 120-127 */
-	{ 0, 0, 0x5, {0x700000,  16 * 64 * 1024} },	/* blocks 112-127 */
-	{ 0, 0, 0x6, {0x600000,  32 * 64 * 1024} },	/* blocks 96-127 */
-	{ 0, 0, 0x7, {0x400000,  64 * 64 * 1024} },	/* blocks 64-127 */
-
-	{ 0, 1, 0x1, {0x000000,       64 * 1024} },	/* block 0 */
-	{ 0, 1, 0x2, {0x000000,   2 * 64 * 1024} },	/* blocks 0-1 */
-	{ 0, 1, 0x3, {0x000000,   4 * 64 * 1024} },	/* blocks 0-3 */
-	{ 0, 1, 0x4, {0x000000,   8 * 64 * 1024} },	/* blocks 0-7 */
-	{ 0, 1, 0x5, {0x000000,  16 * 64 * 1024} },	/* blocks 0-15 */
-	{ 0, 1, 0x6, {0x000000,  32 * 64 * 1024} },	/* blocks 0-31 */
-	{ 0, 1, 0x7, {0x000000,  64 * 64 * 1024} },	/* blocks 0-63 */
-
-	{ X, 1, 0x0, {0x000000, 128 * 64 * 1024} },	/* all */
-	{ X, 1, 0x1, {0x000000, 128 * 64 * 1024} },	/* all */
-	{ X, 1, 0x2, {0x000000, 128 * 64 * 1024} },	/* all */
-	{ X, 1, 0x3, {0x000000, 128 * 64 * 1024} },	/* all */
-	{ X, 1, 0x4, {0x000000, 128 * 64 * 1024} },	/* all */
-	{ X, 1, 0x5, {0x000000, 128 * 64 * 1024} },	/* all */
-	{ X, 1, 0x6, {0x000000, 128 * 64 * 1024} },	/* all */
-	{ X, 1, 0x7, {0x000000, 128 * 64 * 1024} },	/* all */
-};
-
-static struct w25q_range w25q16_ranges[] = {
-	{ X, X, 0, {0, 0} },	/* none */
-	{ 0, 0, 0x1, {0x1f0000, 64 * 1024} },
-	{ 0, 0, 0x2, {0x1e0000, 128 * 1024} },
-	{ 0, 0, 0x3, {0x1c0000, 256 * 1024} },
-	{ 0, 0, 0x4, {0x180000, 512 * 1024} },
-	{ 0, 0, 0x5, {0x100000, 1024 * 1024} },
-
-	{ 0, 1, 0x1, {0x000000, 64 * 1024} },
-	{ 0, 1, 0x2, {0x000000, 128 * 1024} },
-	{ 0, 1, 0x3, {0x000000, 256 * 1024} },
-	{ 0, 1, 0x4, {0x000000, 512 * 1024} },
-	{ 0, 1, 0x5, {0x000000, 1024 * 1024} },
-	{ X, X, 0x6, {0x000000, 2048 * 1024} },
-	{ X, X, 0x7, {0x000000, 2048 * 1024} },
-
-	{ 1, 0, 0x1, {0x1ff000, 4 * 1024} },
-	{ 1, 0, 0x2, {0x1fe000, 8 * 1024} },
-	{ 1, 0, 0x3, {0x1fc000, 16 * 1024} },
-	{ 1, 0, 0x4, {0x1f8000, 32 * 1024} },
-	{ 1, 0, 0x5, {0x1f8000, 32 * 1024} }, 
-
-	{ 1, 1, 0x1, {0x000000, 4 * 1024} },
-	{ 1, 1, 0x2, {0x000000, 8 * 1024} },
-	{ 1, 1, 0x3, {0x000000, 16 * 1024} },
-	{ 1, 1, 0x4, {0x000000, 32 * 1024} },	
-	{ 1, 1, 0x5, {0x000000, 32 * 1024} },
-};
-
-static struct w25q_range w25q32_ranges[] = {
-	{ X, X, 0, {0, 0} },	/* none */
-	{ 0, 0, 0x1, {0x3f0000, 64 * 1024} },
-	{ 0, 0, 0x2, {0x3e0000, 128 * 1024} },
-	{ 0, 0, 0x3, {0x3c0000, 256 * 1024} },
-	{ 0, 0, 0x4, {0x380000, 512 * 1024} },
-	{ 0, 0, 0x5, {0x300000, 1024 * 1024} },
-	{ 0, 0, 0x6, {0x200000, 2048 * 1024} },
-
-	{ 0, 1, 0x1, {0x000000, 64 * 1024} },
-	{ 0, 1, 0x2, {0x000000, 128 * 1024} },
-	{ 0, 1, 0x3, {0x000000, 256 * 1024} },
-	{ 0, 1, 0x4, {0x000000, 512 * 1024} },
-	{ 0, 1, 0x5, {0x000000, 1024 * 1024} },
-	{ 0, 1, 0x6, {0x000000, 2048 * 1024} },
-	{ X, X, 0x7, {0x000000, 4096 * 1024} },
-
-	{ 1, 0, 0x1, {0x3ff000, 4 * 1024} },
-	{ 1, 0, 0x2, {0x3fe000, 8 * 1024} },
-	{ 1, 0, 0x3, {0x3fc000, 16 * 1024} },
-	{ 1, 0, 0x4, {0x3f8000, 32 * 1024} },
-	{ 1, 0, 0x5, {0x3f8000, 32 * 1024} }, 
-
-	{ 1, 1, 0x1, {0x000000, 4 * 1024} },
-	{ 1, 1, 0x2, {0x000000, 8 * 1024} },
-	{ 1, 1, 0x3, {0x000000, 16 * 1024} },
-	{ 1, 1, 0x4, {0x000000, 32 * 1024} },
-	{ 1, 1, 0x5, {0x000000, 32 * 1024} },
-};
-
-static struct w25q_range w25q80_ranges[] = {
-	{ X, X, 0, {0, 0} },	/* none */
-	{ 0, 0, 0x1, {0x0f0000, 64 * 1024} },
-	{ 0, 0, 0x2, {0x0e0000, 128 * 1024} },
-	{ 0, 0, 0x3, {0x0c0000, 256 * 1024} },
-	{ 0, 0, 0x4, {0x080000, 512 * 1024} },
-
-	{ 0, 1, 0x1, {0x000000, 64 * 1024} },
-	{ 0, 1, 0x2, {0x000000, 128 * 1024} },
-	{ 0, 1, 0x3, {0x000000, 256 * 1024} },
-	{ 0, 1, 0x4, {0x000000, 512 * 1024} },
-	{ X, X, 0x6, {0x000000, 1024 * 1024} },
-	{ X, X, 0x7, {0x000000, 1024 * 1024} },
-
-	{ 1, 0, 0x1, {0x1ff000, 4 * 1024} },
-	{ 1, 0, 0x2, {0x1fe000, 8 * 1024} },
-	{ 1, 0, 0x3, {0x1fc000, 16 * 1024} },
-	{ 1, 0, 0x4, {0x1f8000, 32 * 1024} },
-	{ 1, 0, 0x5, {0x1f8000, 32 * 1024} },
-
-	{ 1, 1, 0x1, {0x000000, 4 * 1024} },
-	{ 1, 1, 0x2, {0x000000, 8 * 1024} },
-	{ 1, 1, 0x3, {0x000000, 16 * 1024} },
-	{ 1, 1, 0x4, {0x000000, 32 * 1024} },
-	{ 1, 1, 0x5, {0x000000, 32 * 1024} },
-};
-
-static struct w25q_range w25q64_ranges[] = {
-	{ X, X, 0, {0, 0} },	/* none */
-
-	{ 0, 0, 0x1, {0x7e0000, 128 * 1024} },
-	{ 0, 0, 0x2, {0x7c0000, 256 * 1024} },
-	{ 0, 0, 0x3, {0x780000, 512 * 1024} },
-	{ 0, 0, 0x4, {0x700000, 1024 * 1024} },
-	{ 0, 0, 0x5, {0x600000, 2048 * 1024} },
-	{ 0, 0, 0x6, {0x400000, 4096 * 1024} },
-
-	{ 0, 1, 0x1, {0x000000, 128 * 1024} },
-	{ 0, 1, 0x2, {0x000000, 256 * 1024} },
-	{ 0, 1, 0x3, {0x000000, 512 * 1024} },
-	{ 0, 1, 0x4, {0x000000, 1024 * 1024} },
-	{ 0, 1, 0x5, {0x000000, 2048 * 1024} },
-	{ 0, 1, 0x6, {0x000000, 4096 * 1024} },
-	{ X, X, 0x7, {0x000000, 8192 * 1024} },
-
-	{ 1, 0, 0x1, {0x7ff000, 4 * 1024} },
-	{ 1, 0, 0x2, {0x7fe000, 8 * 1024} },
-	{ 1, 0, 0x3, {0x7fc000, 16 * 1024} },
-	{ 1, 0, 0x4, {0x7f8000, 32 * 1024} },
-	{ 1, 0, 0x5, {0x7f8000, 32 * 1024} },
-
-	{ 1, 1, 0x1, {0x000000, 4 * 1024} },
-	{ 1, 1, 0x2, {0x000000, 8 * 1024} },
-	{ 1, 1, 0x3, {0x000000, 16 * 1024} },
-	{ 1, 1, 0x4, {0x000000, 32 * 1024} },
-	{ 1, 1, 0x5, {0x000000, 32 * 1024} },
-};
-
-struct w25q_range w25r128_ranges[] = {
-	{ X, X, 0, {0, 0} },	/* none */
-
-	{ 0, 0, 0x1, {0xfc0000, 256 * 1024} },
-	{ 0, 0, 0x2, {0xf80000, 512 * 1024} },
-	{ 0, 0, 0x3, {0xf00000, 1024 * 1024} },
-	{ 0, 0, 0x4, {0xe00000, 2048 * 1024} },
-	{ 0, 0, 0x5, {0xc00000, 4096 * 1024} },
-	{ 0, 0, 0x6, {0x800000, 8192 * 1024} },
-
-	{ 0, 1, 0x1, {0x000000, 256 * 1024} },
-	{ 0, 1, 0x2, {0x000000, 512 * 1024} },
-	{ 0, 1, 0x3, {0x000000, 1024 * 1024} },
-	{ 0, 1, 0x4, {0x000000, 2048 * 1024} },
-	{ 0, 1, 0x5, {0x000000, 4096 * 1024} },
-	{ 0, 1, 0x6, {0x000000, 8192 * 1024} },
-	{ X, X, 0x7, {0x000000, 16384 * 1024} },
-
-	{ 1, 0, 0x1, {0xfff000, 4 * 1024} },
-	{ 1, 0, 0x2, {0xffe000, 8 * 1024} },
-	{ 1, 0, 0x3, {0xffc000, 16 * 1024} },
-	{ 1, 0, 0x4, {0xff8000, 32 * 1024} },
-	{ 1, 0, 0x5, {0xff8000, 32 * 1024} },
-
-	{ 1, 1, 0x1, {0x000000, 4 * 1024} },
-	{ 1, 1, 0x2, {0x000000, 8 * 1024} },
-	{ 1, 1, 0x3, {0x000000, 16 * 1024} },
-	{ 1, 1, 0x4, {0x000000, 32 * 1024} },
-	{ 1, 1, 0x5, {0x000000, 32 * 1024} },
-};
-
-struct w25q_range w25x10_ranges[] = {
-	{ X, X, 0, {0, 0} },    /* none */
-	{ 0, 0, 0x1, {0x010000, 64 * 1024} },
-	{ 0, 1, 0x1, {0x000000, 64 * 1024} },
-	{ X, X, 0x2, {0x000000, 128 * 1024} },
-	{ X, X, 0x3, {0x000000, 128 * 1024} },
-};
-
-struct w25q_range w25x20_ranges[] = {
-	{ X, X, 0, {0, 0} },    /* none */
-	{ 0, 0, 0x1, {0x030000, 64 * 1024} },
-	{ 0, 0, 0x2, {0x020000, 128 * 1024} },
-	{ 0, 1, 0x1, {0x000000, 64 * 1024} },
-	{ 0, 1, 0x2, {0x000000, 128 * 1024} },
-	{ 0, X, 0x3, {0x000000, 256 * 1024} },
-};
-
-struct w25q_range w25x40_ranges[] = {
-	{ X, X, 0, {0, 0} },	/* none */
-	{ 0, 0, 0x1, {0x070000, 64 * 1024} },
-	{ 0, 0, 0x2, {0x060000, 128 * 1024} },
-	{ 0, 0, 0x3, {0x040000, 256 * 1024} },
-	{ 0, 1, 0x1, {0x000000, 64 * 1024} },
-	{ 0, 1, 0x2, {0x000000, 128 * 1024} },
-	{ 0, 1, 0x3, {0x000000, 256 * 1024} },
-	{ 0, X, 0x4, {0x000000, 512 * 1024} },
-};
-
-struct w25q_range w25x80_ranges[] = {
-	{ X, X, 0, {0, 0} },    /* none */
-	{ 0, 0, 0x1, {0x0F0000, 64 * 1024} },
-	{ 0, 0, 0x2, {0x0E0000, 128 * 1024} },
-	{ 0, 0, 0x3, {0x0C0000, 256 * 1024} },
-	{ 0, 0, 0x4, {0x080000, 512 * 1024} },
-	{ 0, 1, 0x1, {0x000000, 64 * 1024} },
-	{ 0, 1, 0x2, {0x000000, 128 * 1024} },
-	{ 0, 1, 0x3, {0x000000, 256 * 1024} },
-	{ 0, 1, 0x4, {0x000000, 512 * 1024} },
-	{ 0, X, 0x5, {0x000000, 1024 * 1024} },
-	{ 0, X, 0x6, {0x000000, 1024 * 1024} },
-	{ 0, X, 0x7, {0x000000, 1024 * 1024} },
-};
-
-static struct w25q_range gd25q64_ranges[] = {
-	{ X, X, 0, {0, 0} },	/* none */
-	{ 0, 0, 0x1, {0x7e0000, 128 * 1024} },
-	{ 0, 0, 0x2, {0x7c0000, 256 * 1024} },
-	{ 0, 0, 0x3, {0x780000, 512 * 1024} },
-	{ 0, 0, 0x4, {0x700000, 1024 * 1024} },
-	{ 0, 0, 0x5, {0x600000, 2048 * 1024} },
-	{ 0, 0, 0x6, {0x400000, 4096 * 1024} },
-
-	{ 0, 1, 0x1, {0x000000, 128 * 1024} },
-	{ 0, 1, 0x2, {0x000000, 256 * 1024} },
-	{ 0, 1, 0x3, {0x000000, 512 * 1024} },
-	{ 0, 1, 0x4, {0x000000, 1024 * 1024} },
-	{ 0, 1, 0x5, {0x000000, 2048 * 1024} },
-	{ 0, 1, 0x6, {0x000000, 4096 * 1024} },
-	{ X, X, 0x7, {0x000000, 8192 * 1024} },
-
-	{ 1, 0, 0x1, {0x7ff000, 4 * 1024} },
-	{ 1, 0, 0x2, {0x7fe000, 8 * 1024} },
-	{ 1, 0, 0x3, {0x7fc000, 16 * 1024} },
-	{ 1, 0, 0x4, {0x7f8000, 32 * 1024} },
-	{ 1, 0, 0x5, {0x7f8000, 32 * 1024} },
-	{ 1, 0, 0x6, {0x7f8000, 32 * 1024} },
-
-	{ 1, 1, 0x1, {0x000000, 4 * 1024} },
-	{ 1, 1, 0x2, {0x000000, 8 * 1024} },
-	{ 1, 1, 0x3, {0x000000, 16 * 1024} },
-	{ 1, 1, 0x4, {0x000000, 32 * 1024} },
-	{ 1, 1, 0x5, {0x000000, 32 * 1024} },
-	{ 1, 1, 0x6, {0x000000, 32 * 1024} },
-};
-
-static struct w25q_range a25l040_ranges[] = {
-	{ X, X, 0x0, {0, 0} },	/* none */
-	{ X, X, 0x1, {0x70000, 64 * 1024} },
-	{ X, X, 0x2, {0x60000, 128 * 1024} },
-	{ X, X, 0x3, {0x40000, 256 * 1024} },
-	{ X, X, 0x4, {0x00000, 512 * 1024} },
-	{ X, X, 0x5, {0x00000, 512 * 1024} },
-	{ X, X, 0x6, {0x00000, 512 * 1024} },
-	{ X, X, 0x7, {0x00000, 512 * 1024} },
-};
-
-/* Given a flash chip, this function returns its range table. */
-static int w25_range_table(const struct flashchip *flash,
-                           struct w25q_range **w25q_ranges,
-                           int *num_entries)
-{
-	*w25q_ranges = 0;
-	*num_entries = 0;
-
-	switch (flash->manufacture_id) {
-	case WINBOND_NEX_ID:
-		switch(flash->model_id) {
-		case WINBOND_NEX_W25X10:
-			*w25q_ranges = w25x10_ranges;
-			*num_entries = ARRAY_SIZE(w25x10_ranges);
-			break;
-		case WINBOND_NEX_W25X20:
-			*w25q_ranges = w25x20_ranges;
-			*num_entries = ARRAY_SIZE(w25x20_ranges);
-			break;
-		case WINBOND_NEX_W25X40:
-			*w25q_ranges = w25x40_ranges;
-			*num_entries = ARRAY_SIZE(w25x40_ranges);
-			break;
-		case WINBOND_NEX_W25X80:
-			*w25q_ranges = w25x80_ranges;
-			*num_entries = ARRAY_SIZE(w25x80_ranges);
-			break;
-		case WINBOND_NEX_W25Q80:
-			*w25q_ranges = w25q80_ranges;
-			*num_entries = ARRAY_SIZE(w25q80_ranges);
-			break;
-		case WINBOND_NEX_W25Q16:
-			*w25q_ranges = w25q16_ranges;
-			*num_entries = ARRAY_SIZE(w25q16_ranges);
-			break;
-		case WINBOND_NEX_W25Q32:
-		case WINBOND_NEX_W25Q32DW:
-			*w25q_ranges = w25q32_ranges;
-			*num_entries = ARRAY_SIZE(w25q32_ranges);
-			break;
-		case WINBOND_NEX_W25Q64:
-                case WINBOND_NEX_W25Q64DW:
-			*w25q_ranges = w25q64_ranges;
-			*num_entries = ARRAY_SIZE(w25q64_ranges);
-			break;
-		case WINBOND_NEX_W25R128FV:
-			*w25q_ranges = w25r128_ranges;
-			*num_entries = ARRAY_SIZE(w25r128_ranges);
-			break;
-		default:
-			msg_cerr("%s() %d: WINBOND flash chip mismatch (0x%04x)"
-			         ", aborting\n", __func__, __LINE__,
-			         flash->model_id);
-			return -1;
-		}
-		break;
-	case EON_ID_NOPREFIX:
-		switch (flash->model_id) {
-		case EON_EN25F40:
-			*w25q_ranges = en25f40_ranges;
-			*num_entries = ARRAY_SIZE(en25f40_ranges);
-			break;
-		case EON_EN25Q40:
-			*w25q_ranges = en25q40_ranges;
-			*num_entries = ARRAY_SIZE(en25q40_ranges);
-			break;
-		case EON_EN25Q80:
-			*w25q_ranges = en25q80_ranges;
-			*num_entries = ARRAY_SIZE(en25q80_ranges);
-			break;
-		case EON_EN25Q32:
-			*w25q_ranges = en25q32_ranges;
-			*num_entries = ARRAY_SIZE(en25q32_ranges);
-			break;
-		case EON_EN25Q64:
-			*w25q_ranges = en25q64_ranges;
-			*num_entries = ARRAY_SIZE(en25q64_ranges);
-			break;
-		case EON_EN25Q128:
-			*w25q_ranges = en25q128_ranges;
-			*num_entries = ARRAY_SIZE(en25q128_ranges);
-			break;
-		case EON_EN25S64:
-			*w25q_ranges = en25s64_ranges;
-			*num_entries = ARRAY_SIZE(en25s64_ranges);
-			break;
-		default:
-			msg_cerr("%s():%d: EON flash chip mismatch (0x%04x)"
-			         ", aborting\n", __func__, __LINE__,
-				 flash->model_id);
-			return -1;
-		}
-		break;
-	case MACRONIX_ID:
-		switch (flash->model_id) {
-		case MACRONIX_MX25L1005:
-			*w25q_ranges = mx25l1005_ranges;
-			*num_entries = ARRAY_SIZE(mx25l1005_ranges);
-			break;
-		case MACRONIX_MX25L2005:
-			*w25q_ranges = mx25l2005_ranges;
-			*num_entries = ARRAY_SIZE(mx25l2005_ranges);
-			break;
-		case MACRONIX_MX25L4005:
-			*w25q_ranges = mx25l4005_ranges;
-			*num_entries = ARRAY_SIZE(mx25l4005_ranges);
-			break;
-		case MACRONIX_MX25L8005:
-			*w25q_ranges = mx25l8005_ranges;
-			*num_entries = ARRAY_SIZE(mx25l8005_ranges);
-			break;
-		case MACRONIX_MX25L1605:
-			/* FIXME: MX25L1605 and MX25L1605D have different write
-			 * protection capabilities, but share IDs */
-			*w25q_ranges = mx25l1605d_ranges;
-			*num_entries = ARRAY_SIZE(mx25l1605d_ranges);
-			break;
-		case MACRONIX_MX25L3205:
-			*w25q_ranges = mx25l3205d_ranges;
-			*num_entries = ARRAY_SIZE(mx25l3205d_ranges);
-			break;
-		case MACRONIX_MX25U3235E:
-			*w25q_ranges = mx25u3235e_ranges;
-			*num_entries = ARRAY_SIZE(mx25u3235e_ranges);
-			break;
-		case MACRONIX_MX25U6435E:
-			*w25q_ranges = mx25u6435e_ranges;
-			*num_entries = ARRAY_SIZE(mx25u6435e_ranges);
-			break;
-		default:
-			msg_cerr("%s():%d: MXIC flash chip mismatch (0x%04x)"
-			         ", aborting\n", __func__, __LINE__,
-			         flash->model_id);
-			return -1;
-		}
-		break;
-	case ST_ID:
-		switch(flash->model_id) {
-		case ST_N25Q064__1E:
-		case ST_N25Q064__3E:
-			*w25q_ranges = n25q064_ranges;
-			*num_entries = ARRAY_SIZE(n25q064_ranges);
-			break;
-		default:
-			msg_cerr("%s() %d: Micron flash chip mismatch"
-				 " (0x%04x), aborting\n", __func__, __LINE__,
-				 flash->model_id);
-			return -1;
-		}
-		break;
-	case GIGADEVICE_ID:
-		switch(flash->model_id) {
-		case GIGADEVICE_GD25LQ32:
-			*w25q_ranges = w25q32_ranges;
-			*num_entries = ARRAY_SIZE(w25q32_ranges);
-			break;
-		case GIGADEVICE_GD25Q64:
-		case GIGADEVICE_GD25LQ64:
-			*w25q_ranges = gd25q64_ranges;
-			*num_entries = ARRAY_SIZE(gd25q64_ranges);
-			break;
-		/* TODO(shawnn): add support for other GD parts */
-		default:
-			msg_cerr("%s() %d: GigaDevice flash chip mismatch"
-				 " (0x%04x), aborting\n", __func__, __LINE__,
-				 flash->model_id);
-			return -1;
-		}
-		break;
-	case AMIC_ID_NOPREFIX:
-		switch(flash->model_id) {
-		case AMIC_A25L040:
-			*w25q_ranges = a25l040_ranges;
-			*num_entries = ARRAY_SIZE(a25l040_ranges);
-			break;
-		default:
-			msg_cerr("%s() %d: AMIC flash chip mismatch"
-				 " (0x%04x), aborting\n", __func__, __LINE__,
-				 flash->model_id);
-			return -1;
-		}
-		break;
-	default:
-		msg_cerr("%s: flash vendor (0x%x) not found, aborting\n",
-		         __func__, flash->manufacture_id);
-		return -1;
+	for (size_t i = 0; i < ARRAY_SIZE(bits.bp); i++) {
+		if (can_write_bit(reg_bits->bp[i]))
+			range_bits[bit_count++] = &bits.bp[i];
 	}
 
-	return 0;
-}
+	if (can_write_bit(reg_bits->tb))
+		range_bits[bit_count++] = &bits.tb;
 
-int w25_range_to_status(const struct flashchip *flash,
-                        unsigned int start, unsigned int len,
-                        struct w25q_status *status)
-{
-	struct w25q_range *w25q_ranges;
-	int i, range_found = 0;
-	int num_entries;
+	if (can_write_bit(reg_bits->sec))
+		range_bits[bit_count++] = &bits.sec;
 
-	if (w25_range_table(flash, &w25q_ranges, &num_entries)) return -1;
-	for (i = 0; i < num_entries; i++) {
-		struct wp_range *r = &w25q_ranges[i].range;
+	if (can_write_bit(reg_bits->cmp))
+		range_bits[bit_count++] = &bits.cmp;
 
-		msg_cspew("comparing range 0x%x 0x%x / 0x%x 0x%x\n",
-			  start, len, r->start, r->len);
-		if ((start == r->start) && (len == r->len)) {
-			status->bp0 = w25q_ranges[i].bp & 1;
-			status->bp1 = w25q_ranges[i].bp >> 1;
-			status->bp2 = w25q_ranges[i].bp >> 2;
-			status->tb = w25q_ranges[i].tb;
-			status->sec = w25q_ranges[i].sec;
+	/* Allocate output buffer */
+	*count = 1 << bit_count;
+	*ranges = calloc(*count, sizeof(struct wp_range_and_bits));
 
-			range_found = 1;
-			break;
-		}
-	}
+	/* TODO: take WPS bit into account. */
 
-	if (!range_found) {
-		msg_cerr("matching range not found\n");
-		return -1;
-	}
-	return 0;
-}
-
-int w25_status_to_range(const struct flashchip *flash,
-                        const struct w25q_status *status,
-                        unsigned int *start, unsigned int *len)
-{
-	struct w25q_range *w25q_ranges;
-	int i, status_found = 0;
-	int num_entries;
-
-	if (w25_range_table(flash, &w25q_ranges, &num_entries)) return -1;
-	for (i = 0; i < num_entries; i++) {
-		int bp;
-		int table_bp, table_tb, table_sec;
-
-		bp = status->bp0 | (status->bp1 << 1) | (status->bp2 << 2);
-		msg_cspew("comparing  0x%x 0x%x / 0x%x 0x%x / 0x%x 0x%x\n",
-		          bp, w25q_ranges[i].bp,
-		          status->tb, w25q_ranges[i].tb,
-		          status->sec, w25q_ranges[i].sec);
-		table_bp = w25q_ranges[i].bp;
-		table_tb = w25q_ranges[i].tb;
-		table_sec = w25q_ranges[i].sec;
-		if ((bp == table_bp || table_bp == X) &&
-		    (status->tb == table_tb || table_tb == X) &&
-		    (status->sec == table_sec || table_sec == X)) {
-			*start = w25q_ranges[i].range.start;
-			*len = w25q_ranges[i].range.len;
-
-			status_found = 1;
-			break;
-		}
-	}
-
-	if (!status_found) {
-		msg_cerr("matching status not found\n");
-		return -1;
-	}
-	return 0;
-}
-
-/* Given a [start, len], this function calls w25_range_to_status() to convert
- * it to flash-chip-specific range bits, then sets into status register.
- */
-static int w25_set_range(const struct flashchip *flash,
-                         unsigned int start, unsigned int len)
-{
-	struct w25q_status status;
-	int tmp = 0;
-	int expected = 0;
-
-	memset(&status, 0, sizeof(status));
-	tmp = spi_read_status_register();
-	memcpy(&status, &tmp, 1);
-	msg_cdbg("%s: old status: 0x%02x\n", __func__, tmp);
-
-	if (w25_range_to_status(flash, start, len, &status)) return -1;
-
-	msg_cdbg("status.busy: %x\n", status.busy);
-	msg_cdbg("status.wel: %x\n", status.wel);
-	msg_cdbg("status.bp0: %x\n", status.bp0);
-	msg_cdbg("status.bp1: %x\n", status.bp1);
-	msg_cdbg("status.bp2: %x\n", status.bp2);
-	msg_cdbg("status.tb: %x\n", status.tb);
-	msg_cdbg("status.sec: %x\n", status.sec);
-	msg_cdbg("status.srp0: %x\n", status.srp0);
-
-	memcpy(&expected, &status, sizeof(status));
-	spi_write_status_register(flash, expected);
-
-	tmp = spi_read_status_register();
-	msg_cdbg("%s: new status: 0x%02x\n", __func__, tmp);
-	if ((tmp & MASK_WP_AREA) == (expected & MASK_WP_AREA)) {
-		return 0;
-	} else {
-		msg_cerr("expected=0x%02x, but actual=0x%02x.\n",
-		          expected, tmp);
-		return 1;
-	}
-}
-static int w25r_set_range(const struct flashchip *flash,
-		unsigned int start, unsigned int len)
-{
-	struct w25q_status status;
-	struct flashchip chip;
-	uint8_t arr, expected;
-	int ret;
-
-	memset(&status, 0, sizeof(status));
-	memset(&chip, 0, sizeof(chip));
-	memcpy(&chip, flash, sizeof(chip));
-
-	/* passing a copy of flash since it is read only */
-	ret = flash->read(&chip, &arr, 0, 1);
-	if (ret) {
-		msg_cerr("Read status register failed.\n");
-		return ret;
-	}
-	memcpy(&status, &arr, 1);
-	msg_cdbg("%s: old status: 0x%02x\n", __func__, arr);
-
-	if (w25_range_to_status(flash, start, len, &status))
-		return -1;
-
-	msg_cdbg("status.busy: %x\n", status.busy);
-	msg_cdbg("status.wel: %x\n", status.wel);
-	msg_cdbg("status.bp0: %x\n", status.bp0);
-	msg_cdbg("status.bp1: %x\n", status.bp1);
-	msg_cdbg("status.bp2: %x\n", status.bp2);
-	msg_cdbg("status.tb: %x\n", status.tb);
-	msg_cdbg("status.sec: %x\n", status.sec);
-	msg_cdbg("status.srp0: %x\n", status.srp0);
-
-	memcpy(&expected, &status, sizeof(status));
-	ret = flash->write(&chip, &expected, 0, 1);
-	if (ret) {
-		msg_cerr("Write status register failed.\n");
-		return ret;
-	}
-	ret = flash->read(&chip, &arr, 0, 1);
-	if (ret) {
-		msg_cerr("Read status register failed.\n");
-		return ret;
-	}
-	msg_cdbg("%s: new status: 0x%02x\n", __func__, arr);
-
-	if ((arr & MASK_WP_AREA) == (expected & MASK_WP_AREA)) {
-		return 0;
-	} else {
-		msg_cerr("expected=0x%02x, but actual=0x%02x.\n",
-			expected, arr);
-		return 1;
-	}
-}
-
-static int w25r_wp_status(const struct flashchip *flash)
-{
-	struct w25q_status sr;
-	struct flashchip chip;
-	uint8_t tmp;
-	unsigned int start, len;
-	int ret = 0;
-
-	memset(&sr, 0, sizeof(sr));
-	memset(&chip, 0, sizeof(chip));
-	memcpy(&chip, flash, sizeof(chip));
-
-	ret = flash->read(&chip, &tmp, 0, 1);
-	if (ret) {
-		msg_cerr("Read status register failed.\n");
-		return ret;
-	}
-	memcpy(&sr, &tmp, 1);
-	msg_cinfo("WP: status: 0x%02x\n", tmp);
-	msg_cinfo("WP: status.srp0: %x\n", sr.srp0);
-	msg_cinfo("WP: write protect is %s.\n",
-		(sr.srp0) ? "enabled" : "disabled");
-	msg_cinfo("WP: write protect range: ");
-	if (w25_status_to_range(flash, &sr, &start, &len)) {
-		msg_cinfo("(cannot resolve the range)\n");
-		ret = -1;
-	} else {
-		msg_cinfo("start=0x%08x, len=0x%08x\n", start, len);
-	}
-	return ret;
-}
-
-
-/* Print out the current status register value with human-readable text. */
-static int w25_wp_status(const struct flashchip *flash)
-{
-	struct w25q_status status;
-	int tmp;
-	unsigned int start, len;
-	int ret = 0;
-
-	memset(&status, 0, sizeof(status));
-	tmp = spi_read_status_register();
-	memcpy(&status, &tmp, 1);
-	msg_cinfo("WP: status: 0x%02x\n", tmp);
-	msg_cinfo("WP: status.srp0: %x\n", status.srp0);
-	msg_cinfo("WP: write protect is %s.\n",
-	          status.srp0 ? "enabled" : "disabled");
-
-	msg_cinfo("WP: write protect range: ");
-	if (w25_status_to_range(flash, &status, &start, &len)) {
-		msg_cinfo("(cannot resolve the range)\n");
-		ret = -1;
-	} else {
-		msg_cinfo("start=0x%08x, len=0x%08x\n", start, len);
-	}
-
-	return ret;
-}
-
-/* Set/clear the SRP0 bit in the status register. */
-static int w25_set_srp0(const struct flashchip *flash, int enable)
-{
-	struct w25q_status status;
-	int tmp = 0;
-	int expected = 0;
-
-	memset(&status, 0, sizeof(status));
-	tmp = spi_read_status_register();
-	/* FIXME: this is NOT endian-free copy. */
-	memcpy(&status, &tmp, 1);
-	msg_cdbg("%s: old status: 0x%02x\n", __func__, tmp);
-
-	status.srp0 = enable ? 1 : 0;
-	memcpy(&expected, &status, sizeof(status));
-	spi_write_status_register(flash, expected);
-
-	tmp = spi_read_status_register();
-	msg_cdbg("%s: new status: 0x%02x\n", __func__, tmp);
-	if ((tmp & MASK_WP_AREA) != (expected & MASK_WP_AREA))
-		return 1;
-
-	return 0;
-}
-
-static int w25_set_srp(const struct flashchip *flash, int enable)
-{
-	struct w25q_status status;
-	struct flashchip chip;
-	int tmp = 0;
-	uint8_t arr, expected;
-
-	memset(&status, 0, sizeof(status));
-	memset(&chip, 0, sizeof(chip));
-	memcpy(&chip, flash, sizeof(chip));
-
-	tmp = flash->read(&chip, &arr, 0, 1);
-	if (tmp) {
-		msg_cerr("Read status register failed.\n");
-		return tmp;
-	}
-	memcpy(&status, &arr, 1);
-	msg_cdbg("%s: old status: 0x%02x\n", __func__, tmp);
-
-	status.srp0 = enable ? 1 : 0;
-	memcpy(&expected, &status, sizeof(status));
-	tmp = flash->write(&chip, &expected, 0, 1);
-	if (tmp) {
-		msg_cerr("Write status register failed.\n");
-		return tmp;
-	}
-	tmp = flash->read(&chip, &arr, 0, 1);
-	if (tmp) {
-		msg_cerr("Read status register failed.\n");
-		return tmp;
-	}
-	msg_cdbg("%s: new status: 0x%02x\n", __func__, arr);
-	if ((arr & MASK_WP_AREA) != (expected & MASK_WP_AREA))
-		return 1;
-
-	return 0;
-}
-
-static int w25_enable_writeprotect(const struct flashchip *flash,
-		enum wp_mode wp_mode)
-{
-	int ret;
-
-	switch (wp_mode) {
-	case WP_MODE_HARDWARE:
-		ret = w25_set_srp0(flash, 1);
-		break;
-	default:
-		msg_cerr("%s(): unsupported write-protect mode\n", __func__);
-		return 1;
-	}
-
-	if (ret)
-		msg_cerr("%s(): error=%d.\n", __func__, ret);
-	return ret;
-}
-
-static int w25_disable_writeprotect(const struct flashchip *flash)
-{
-	int ret;
-
-	ret = w25_set_srp0(flash, 0);
-	if (ret)
-		msg_cerr("%s(): error=%d.\n", __func__, ret);
-	return ret;
-}
-
-static int w25_list_ranges(const struct flashchip *flash)
-{
-	struct w25q_range *w25q_ranges;
-	int i, num_entries;
-
-	if (w25_range_table(flash, &w25q_ranges, &num_entries)) return -1;
-	for (i = 0; i < num_entries; i++) {
-		msg_cinfo("start: 0x%06x, length: 0x%06x\n",
-		          w25q_ranges[i].range.start,
-		          w25q_ranges[i].range.len);
-	}
-
-	return 0;
-}
-
-/* FIXME: Move to spi25.c if it's a JEDEC standard opcode */
-uint8_t w25q_read_status_register_2(void)
-{
-	static const unsigned char cmd[JEDEC_RDSR_OUTSIZE] = { 0x35 };
-	unsigned char readarr[2];
-	int ret;
-
-	/* Read Status Register */
-	ret = spi_send_command(sizeof(cmd), sizeof(readarr), cmd, readarr);
-	if (ret) {
+	for (size_t range_index = 0; range_index < *count; range_index++) {
 		/*
-		 * FIXME: make this a benign failure for now in case we are
-		 * unable to execute the opcode
+		 * Extract bits from the range index and assign them to members
+		 * of the wp_bits structure. The loop bounds ensure that all
+		 * bit combinations will be enumerated.
 		 */
-		msg_cdbg("RDSR2 failed!\n");
-		readarr[0] = 0x00;
+		for (size_t i = 0; i < bit_count; i++)
+			*range_bits[i] = (range_index >> i) & 1;
+
+		struct wp_range_and_bits *output = &(*ranges)[range_index];
+
+		output->bits = bits;
+		enum flashrom_wp_result ret = get_wp_range(&output->range, flash, &bits);
+		if (ret != FLASHROM_WP_OK) {
+			free(*ranges);
+			return ret;
+		}
+
+		/* Debug: print range bits and range */
+		msg_gspew("Enumerated range: ");
+		if (bits.cmp_bit_present)
+			msg_gspew("CMP=%u ", bits.cmp);
+		if (bits.sec_bit_present)
+			msg_gspew("SEC=%u ", bits.sec);
+		if (bits.tb_bit_present)
+			msg_gspew("TB=%u ", bits.tb);
+		for (size_t i = 0; i < bits.bp_bit_count; i++) {
+			size_t j = bits.bp_bit_count - i - 1;
+			msg_gspew("BP%zu=%u ", j, bits.bp[j]);
+		}
+		msg_gspew(" start=0x%08zx length=0x%08zx\n",
+			  output->range.start, output->range.len);
 	}
 
-	return readarr[0];
+	/* Sort ranges. Ensures consistency if there are duplicate ranges. */
+	qsort(*ranges, *count, sizeof(struct wp_range_and_bits), compare_ranges);
+
+	/* Remove duplicates */
+	size_t output_index = 0;
+	struct wp_range *last_range = NULL;
+
+	for (size_t i = 0; i < *count; i++) {
+		bool different_to_last =
+			(last_range == NULL) ||
+			((*ranges)[i].range.start != last_range->start) ||
+			((*ranges)[i].range.len   != last_range->len);
+
+		if (different_to_last) {
+			/* Move range to the next free position */
+			(*ranges)[output_index] = (*ranges)[i];
+			output_index++;
+			/* Keep track of last non-duplicate range */
+			last_range = &(*ranges)[i].range;
+		}
+	}
+	/* Reduce count to only include non-duplicate ranges */
+	*count = output_index;
+
+	return FLASHROM_WP_OK;
 }
 
-static int w25q_wp_status(const struct flashchip *flash)
+static bool ranges_equal(struct wp_range a, struct wp_range b)
 {
-	struct w25q_status sr1;
-	struct w25q_status_2 sr2;
-	uint8_t tmp[2];
-	unsigned int start, len;
-	int ret = 0;
-
-	memset(&sr1, 0, sizeof(sr1));
-	tmp[0] = spi_read_status_register();
-	memcpy(&sr1, &tmp[0], 1);
-
-	memset(&sr2, 0, sizeof(sr2));
-	tmp[1] = w25q_read_status_register_2();
-	memcpy(&sr2, &tmp[1], 1);
-
-	msg_cinfo("WP: status: 0x%02x%02x\n", tmp[1], tmp[0]);
-	msg_cinfo("WP: status.srp0: %x\n", sr1.srp0);
-	msg_cinfo("WP: status.srp1: %x\n", sr2.srp1);
-	msg_cinfo("WP: write protect is %s.\n",
-	          (sr1.srp0 || sr2.srp1) ? "enabled" : "disabled");
-
-	msg_cinfo("WP: write protect range: ");
-	if (w25_status_to_range(flash, &sr1, &start, &len)) {
-		msg_cinfo("(cannot resolve the range)\n");
-		ret = -1;
-	} else {
-		msg_cinfo("start=0x%08x, len=0x%08x\n", start, len);
-	}
-
-	return ret;
+	return (a.start == b.start) && (a.len == b.len);
 }
 
 /*
- * W25Q adds an optional byte to the standard WRSR opcode. If /CS is
- * de-asserted after the first byte, then it acts like a JEDEC-standard
- * WRSR command. if /CS is asserted, then the next data byte is written
- * into status register 2.
+ * Modify the range-related bits in a wp_bits structure so they select a given
+ * protection range. Bits that control the protection mode are not changed.
  */
-#define W25Q_WRSR_OUTSIZE	0x03
-static int w25q_write_status_register_WREN(uint8_t s1, uint8_t s2)
+static int set_wp_range(struct wp_bits *bits, struct flashctx *flash, const struct wp_range range)
 {
-	int result;
-	struct spi_command cmds[] = {
-	{
-	/* FIXME: WRSR requires either EWSR or WREN depending on chip type. */
-		.writecnt       = JEDEC_WREN_OUTSIZE,
-		.writearr       = (const unsigned char[]){ JEDEC_WREN },
-		.readcnt        = 0,
-		.readarr        = NULL,
-	}, {
-		.writecnt       = W25Q_WRSR_OUTSIZE,
-		.writearr       = (const unsigned char[]){ JEDEC_WRSR, s1, s2 },
-		.readcnt        = 0,
-		.readarr        = NULL,
-	}, {
-		.writecnt       = 0,
-		.writearr       = NULL,
-		.readcnt        = 0,
-		.readarr        = NULL,
-	}};
+	struct wp_range_and_bits *ranges = NULL;
+	size_t count;
 
-	result = spi_send_multicommand(cmds);
-	if (result) {
-	        msg_cerr("%s failed during command execution\n",
-	                __func__);
-	}
+	enum flashrom_wp_result ret = get_ranges_and_wp_bits(flash, *bits, &ranges, &count);
+	if (ret != FLASHROM_WP_OK)
+		return ret;
 
-	/* WRSR performs a self-timed erase before the changes take effect. */
-	programmer_delay(100 * 1000);
+	/* Search for matching range */
+	ret = FLASHROM_WP_ERR_RANGE_UNSUPPORTED;
+	for (size_t i = 0; i < count; i++) {
 
-	return result;
-}
-
-/*
- * Set/clear the SRP1 bit in status register 2.
- * FIXME: make this more generic if other chips use the same SR2 layout
- */
-static int w25q_set_srp1(const struct flashchip *flash, int enable)
-{
-	struct w25q_status sr1;
-	struct w25q_status_2 sr2;
-	uint8_t tmp, expected;
-
-	tmp = spi_read_status_register();
-	memcpy(&sr1, &tmp, 1);
-	tmp = w25q_read_status_register_2();
-	memcpy(&sr2, &tmp, 1);
-
-	msg_cdbg("%s: old status 2: 0x%02x\n", __func__, tmp);
-
-	sr2.srp1 = enable ? 1 : 0;
-
-	memcpy(&expected, &sr2, 1);
-	w25q_write_status_register_WREN(*((uint8_t *)&sr1), *((uint8_t *)&sr2));
-
-	tmp = w25q_read_status_register_2();
-	msg_cdbg("%s: new status 2: 0x%02x\n", __func__, tmp);
-	if ((tmp & MASK_WP2_AREA) != (expected & MASK_WP2_AREA))
-		return 1;
-
-	return 0;
-}
-
-enum wp_mode get_wp_mode(const char *mode_str)
-{
-	enum wp_mode wp_mode = WP_MODE_UNKNOWN;
-
-	if (!strcasecmp(mode_str, "hardware"))
-		wp_mode = WP_MODE_HARDWARE;
-	else if (!strcasecmp(mode_str, "power_cycle"))
-		wp_mode = WP_MODE_POWER_CYCLE;
-	else if (!strcasecmp(mode_str, "permanent"))
-		wp_mode = WP_MODE_PERMANENT;
-
-	return wp_mode;
-}
-
-static int w25r_disable_writeprotect(const struct flashchip *flash)
-{
-	int ret;
-
-	ret = w25_set_srp(flash, 0);
-	if (ret)
-		msg_cerr("%s(): error=%d.\n", __func__, ret);
-
-	return ret;
-}
-
-static int w25q_disable_writeprotect(const struct flashchip *flash,
-		enum wp_mode wp_mode)
-{
-	int ret = 1;
-	struct w25q_status_2 sr2;
-	uint8_t tmp;
-
-	switch (wp_mode) {
-	case WP_MODE_HARDWARE:
-		ret = w25_set_srp0(flash, 0);
-		break;
-	case WP_MODE_POWER_CYCLE:
-		tmp = w25q_read_status_register_2();
-		memcpy(&sr2, &tmp, 1);
-		if (sr2.srp1) {
-			msg_cerr("%s(): must disconnect power to disable "
-					"write-protection\n", __func__);
-		} else {
+		if (ranges_equal(ranges[i].range, range)) {
+			*bits = ranges[i].bits;
 			ret = 0;
+			break;
 		}
-		break;
-	case WP_MODE_PERMANENT:
-		msg_cerr("%s(): cannot disable permanent write-protection\n",
-				__func__);
-		break;
+	}
+
+	free(ranges);
+
+	return ret;
+}
+
+/** Get the mode selected by a WP configuration. */
+static int get_wp_mode(enum flashrom_wp_mode *mode, const struct wp_bits *bits)
+{
+	const enum flashrom_wp_mode wp_modes[2][2] = {
+		{
+			FLASHROM_WP_MODE_DISABLED,	/* srl=0, srp=0 */
+			FLASHROM_WP_MODE_HARDWARE,	/* srl=0, srp=1 */
+		}, {
+			FLASHROM_WP_MODE_POWER_CYCLE,	/* srl=1, srp=0 */
+			FLASHROM_WP_MODE_PERMANENT,	/* srl=1, srp=1 */
+		},
+	};
+
+	*mode = wp_modes[bits->srl][bits->srp];
+
+	return FLASHROM_WP_OK;
+}
+
+/** Modify a wp_bits structure such that it will select a specified protection mode. */
+static int set_wp_mode(struct wp_bits *bits, const enum flashrom_wp_mode mode)
+{
+	switch (mode) {
+	case FLASHROM_WP_MODE_DISABLED:
+		bits->srl = 0;
+		bits->srp = 0;
+		return FLASHROM_WP_OK;
+
+	case FLASHROM_WP_MODE_HARDWARE:
+		if (!bits->srp_bit_present)
+			return FLASHROM_WP_ERR_CHIP_UNSUPPORTED;
+
+		bits->srl = 0;
+		bits->srp = 1;
+		return FLASHROM_WP_OK;
+
+	case FLASHROM_WP_MODE_POWER_CYCLE:
+	case FLASHROM_WP_MODE_PERMANENT:
 	default:
-		msg_cerr("%s(): invalid mode specified\n", __func__);
-		break;
+		/*
+		 * Don't try to enable power cycle or permanent protection for
+		 * now. Those modes may be possible to activate on some chips,
+		 * but they are usually unavailable by default or require special
+		 * commands to activate.
+		 */
+		return FLASHROM_WP_ERR_MODE_UNSUPPORTED;
 	}
-
-	if (ret)
-		msg_cerr("%s(): error=%d.\n", __func__, ret);
-	return ret;
 }
 
-static int w25q_disable_writeprotect_default(const struct flashchip *flash)
+static bool chip_supported(struct flashctx *flash)
 {
-	return w25q_disable_writeprotect(flash, WP_MODE_HARDWARE);
+	return (flash->chip != NULL) && (flash->chip->decode_range != NO_DECODE_RANGE_FUNC);
 }
 
-static int w25r_enable_writeprotect(const struct flashchip *flash,
-		enum wp_mode wp_mode)
+
+bool wp_operations_available(struct flashrom_flashctx *flash)
 {
-	int ret;
-
-	switch (wp_mode) {
-	case WP_MODE_HARDWARE:
-		ret = w25_set_srp(flash, 1);
-		break;
-	default:
-		msg_perr("%s(): invalid mode for Sunrise Point %d\n",
-			__func__, wp_mode);
-		break;
-	}
-	if (ret)
-		msg_cerr("%s(): error=%d.\n", __func__, ret);
-
-	return ret;
+	return (flash->mst->buses_supported & BUS_SPI) ||
+		((flash->mst->buses_supported & BUS_PROG) &&
+			flash->mst->opaque.read_register &&
+			flash->mst->opaque.write_register);
 }
 
-static int w25q_enable_writeprotect(const struct flashchip *flash,
-		enum wp_mode wp_mode)
+enum flashrom_wp_result wp_read_cfg(struct flashrom_wp_cfg *cfg, struct flashctx *flash)
 {
-	int ret = 1;
-	struct w25q_status sr1;
-	struct w25q_status_2 sr2;
-	uint8_t tmp;
+	struct wp_bits bits;
+	enum flashrom_wp_result ret = FLASHROM_WP_OK;
 
-	switch (wp_mode) {
-	case WP_MODE_HARDWARE:
-		if (w25q_disable_writeprotect(flash, WP_MODE_POWER_CYCLE)) {
-			msg_cerr("%s(): cannot disable power cycle WP mode\n",
-					__func__);
-			break;
-		}
+	if (!chip_supported(flash))
+		ret = FLASHROM_WP_ERR_CHIP_UNSUPPORTED;
 
-		tmp = spi_read_status_register();
-		memcpy(&sr1, &tmp, 1);
-		if (sr1.srp0)
-			ret = 0;
-		else
-			ret = w25_set_srp0(flash, 1);
+	if (ret == FLASHROM_WP_OK)
+		ret = read_wp_bits(&bits, flash);
 
-		break;
-	case WP_MODE_POWER_CYCLE:
-		if (w25q_disable_writeprotect(flash, WP_MODE_HARDWARE)) {
-			msg_cerr("%s(): cannot disable hardware WP mode\n",
-					__func__);
-			break;
-		}
+	if (ret == FLASHROM_WP_OK)
+		ret = get_wp_range(&cfg->range, flash, &bits);
 
-		tmp = w25q_read_status_register_2();
-		memcpy(&sr2, &tmp, 1);
-		if (sr2.srp1)
-			ret = 0;
-		else
-			ret = w25q_set_srp1(flash, 1);
-
-		break;
-	case WP_MODE_PERMANENT:
-		tmp = spi_read_status_register();
-		memcpy(&sr1, &tmp, 1);
-		if (sr1.srp0 == 0) {
-			ret = w25_set_srp0(flash, 1);
-			if (ret) {
-				msg_perr("%s(): cannot enable SRP0 for "
-						"permanent WP\n", __func__);
-				break;
-			}
-		}
-
-		tmp = w25q_read_status_register_2();
-		memcpy(&sr2, &tmp, 1);
-		if (sr2.srp1 == 0) {
-			ret = w25q_set_srp1(flash, 1);
-			if (ret) {
-				msg_perr("%s(): cannot enable SRP1 for "
-						"permanent WP\n", __func__);
-				break;
-			}
-		}
-
-		break;
-	default:
-		msg_perr("%s(): invalid mode %d\n", __func__, wp_mode);
-		break;
-	}
-
-	if (ret)
-		msg_cerr("%s(): error=%d.\n", __func__, ret);
-	return ret;
-}
-
-/* FIXME: Move to spi25.c if it's a JEDEC standard opcode */
-uint8_t mx25l_read_config_register(void)
-{
-	static const unsigned char cmd[JEDEC_RDSR_OUTSIZE] = { 0x15 };
-	unsigned char readarr[2];	/* leave room for dummy byte */
-	int ret;
-
-	ret = spi_send_command(sizeof(cmd), sizeof(readarr), cmd, readarr);
-	if (ret) {
-		msg_cerr("RDCR failed!\n");
-		readarr[0] = 0x00;
-	}
-
-	return readarr[0];
-}
-/* W25P, W25X, and many flash chips from various vendors */
-struct wp wp_w25 = {
-	.list_ranges	= w25_list_ranges,
-	.set_range	= w25_set_range,
-	.enable		= w25_enable_writeprotect,
-	.disable	= w25_disable_writeprotect,
-	.wp_status	= w25_wp_status,
-
-};
-
-/* W25Q series has features such as a second status register and SFDP */
-struct wp wp_w25q = {
-	.list_ranges	= w25_list_ranges,
-	.set_range	= w25_set_range,
-	.enable		= w25q_enable_writeprotect,
-	/*
-	 * By default, disable hardware write-protection. We may change
-	 * this later if we want to add fine-grained write-protect disable
-	 * as a command-line option.
-	 */
-	.disable	= w25q_disable_writeprotect_default,
-	.wp_status	= w25q_wp_status,
-};
-
-/* W25R Series */
-struct wp wp_w25r = {
-	.list_ranges	= w25_list_ranges,
-	.set_range	= w25r_set_range,
-	.enable		= w25r_enable_writeprotect,
-	.disable	= w25r_disable_writeprotect,
-	.wp_status	= w25r_wp_status,
-};
-
-struct generic_range gd25q32_cmp0_ranges[] = {
-	/* none, bp4 and bp3 => don't care */
-	{ { }, 0x00, {0, 0} },
-	{ { }, 0x08, {0, 0} },
-	{ { }, 0x10, {0, 0} },
-	{ { }, 0x18, {0, 0} },
-
-	{ { }, 0x01, {0x3f0000, 64 * 1024} },
-	{ { }, 0x02, {0x3e0000, 128 * 1024} },
-	{ { }, 0x03, {0x3c0000, 256 * 1024} },
-	{ { }, 0x04, {0x380000, 512 * 1024} },
-	{ { }, 0x05, {0x300000, 1024 * 1024} },
-	{ { }, 0x06, {0x200000, 2048 * 1024} },
-
-	{ { }, 0x09, {0x000000, 64 * 1024} },
-	{ { }, 0x0a, {0x000000, 128 * 1024} },
-	{ { }, 0x0b, {0x000000, 256 * 1024} },
-	{ { }, 0x0c, {0x000000, 512 * 1024} },
-	{ { }, 0x0d, {0x000000, 1024 * 1024} },
-	{ { }, 0x0e, {0x000000, 2048 * 1024} },
-
-	/* all, bp4 and bp3 => don't care */
-	{ { }, 0x07, {0x000000, 4096 * 1024} },
-	{ { }, 0x0f, {0x000000, 4096 * 1024} },
-	{ { }, 0x17, {0x000000, 4096 * 1024} },
-	{ { }, 0x1f, {0x000000, 4096 * 1024} },
-
-	{ { }, 0x11, {0x3ff000, 4 * 1024} },
-	{ { }, 0x12, {0x3fe000, 8 * 1024} },
-	{ { }, 0x13, {0x3fc000, 16 * 1024} },
-	{ { }, 0x14, {0x3f8000, 32 * 1024} },	/* bp0 => don't care */
-	{ { }, 0x15, {0x3f8000, 32 * 1024} },	/* bp0 => don't care */
-	{ { }, 0x16, {0x3f8000, 32 * 1024} },
-
-	{ { }, 0x19, {0x000000, 4 * 1024} },
-	{ { }, 0x1a, {0x000000, 8 * 1024} },
-	{ { }, 0x1b, {0x000000, 16 * 1024} },
-	{ { }, 0x1c, {0x000000, 32 * 1024} },	/* bp0 => don't care */
-	{ { }, 0x1d, {0x000000, 32 * 1024} },	/* bp0 => don't care */
-	{ { }, 0x1e, {0x000000, 32 * 1024} },
-};
-
-struct generic_range gd25q32_cmp1_ranges[] = {
-	/* none, bp4 and bp3 => don't care */
-	{ { }, 0x00, {0, 0} },
-	{ { }, 0x08, {0, 0} },
-	{ { }, 0x10, {0, 0} },
-	{ { }, 0x18, {0, 0} },
-
-	{ { }, 0x01, {0x000000, 4032 * 1024} },
-	{ { }, 0x02, {0x000000, 3968 * 1024} },
-	{ { }, 0x03, {0x000000, 3840 * 1024} },
-	{ { }, 0x04, {0x000000, 3584 * 1024} },
-	{ { }, 0x05, {0x000000, 3 * 1024 * 1024} },
-	{ { }, 0x06, {0x000000, 2 * 1024 * 1024} },
-
-	{ { }, 0x09, {0x010000, 4032 * 1024} },
-	{ { }, 0x0a, {0x020000, 3968 * 1024} },
-	{ { }, 0x0b, {0x040000, 3840 * 1024} },
-	{ { }, 0x0c, {0x080000, 3584 * 1024} },
-	{ { }, 0x0d, {0x100000, 3 * 1024 * 1024} },
-	{ { }, 0x0e, {0x200000, 2 * 1024 * 1024} },
-
-	/* all, bp4 and bp3 => don't care */
-	{ { }, 0x07, {0x000000, 4096 * 1024} },
-	{ { }, 0x0f, {0x000000, 4096 * 1024} },
-	{ { }, 0x17, {0x000000, 4096 * 1024} },
-	{ { }, 0x1f, {0x000000, 4096 * 1024} },
-
-	{ { }, 0x11, {0x000000, 4092 * 1024} },
-	{ { }, 0x12, {0x000000, 4088 * 1024} },
-	{ { }, 0x13, {0x000000, 4080 * 1024} },
-	{ { }, 0x14, {0x000000, 4064 * 1024} },	/* bp0 => don't care */
-	{ { }, 0x15, {0x000000, 4064 * 1024} },	/* bp0 => don't care */
-	{ { }, 0x16, {0x000000, 4064 * 1024} },
-
-	{ { }, 0x19, {0x001000, 4092 * 1024} },
-	{ { }, 0x1a, {0x002000, 4088 * 1024} },
-	{ { }, 0x1b, {0x040000, 4080 * 1024} },
-	{ { }, 0x1c, {0x080000, 4064 * 1024} },	/* bp0 => don't care */
-	{ { }, 0x1d, {0x080000, 4064 * 1024} },	/* bp0 => don't care */
-	{ { }, 0x1e, {0x080000, 4064 * 1024} },
-};
-
-static struct generic_wp gd25q32_wp = {
-	/* TODO: map second status register */
-	.sr1 = { .bp0_pos = 2, .bp_bits = 5, .srp_pos = 7 },
-};
-
-#if 0
-/* FIXME: MX25L6405D has same ID as MX25L6406 */
-static struct w25q_range mx25l6405d_ranges[] = {
-	{ X, 0, 0, {0, 0} },	/* none */
-	{ X, 0, 0x1, {0x7e0000, 2 * 64 * 1024} },	/* blocks 126-127 */
-	{ X, 0, 0x2, {0x7c0000, 4 * 64 * 1024} },	/* blocks 124-127 */
-	{ X, 0, 0x3, {0x780000, 8 * 64 * 1024} },	/* blocks 120-127 */
-	{ X, 0, 0x4, {0x700000, 16 * 64 * 1024} },	/* blocks 112-127 */
-	{ X, 0, 0x5, {0x600000, 32 * 64 * 1024} },	/* blocks 96-127 */
-	{ X, 0, 0x6, {0x400000, 64 * 64 * 1024} },	/* blocks 64-127 */
-	{ X, 0, 0x7, {0x000000, 64 * 128 * 1024} },	/* blocks 0-127 */
-
-	{ X, 1, 0x0, {0x000000, 8192 * 1024} },
-	{ X, 1, 0x1, {0x000000, 64 * 64 * 1024} },	/* blocks 0-63 */
-	{ X, 1, 0x2, {0x000000, 64 * 96 * 1024} },	/* blocks 0-95 */
-	{ X, 1, 0x3, {0x000000, 64 * 112 * 1024} },	/* blocks 0-111 */
-	{ X, 1, 0x4, {0x000000, 64 * 120 * 1024} },	/* blocks 0-119 */
-	{ X, 1, 0x5, {0x000000, 64 * 124 * 1024} },	/* blocks 0-123 */
-	{ X, 1, 0x6, {0x000000, 64 * 126 * 1024} },	/* blocks 0-125 */
-	{ X, 1, 0x7, {0x000000, 64 * 128 * 1024} },	/* blocks 0-127 */
-};
-#endif
-
-/* FIXME: MX25L6406 has same ID as MX25L6405D */
-struct generic_range mx25l6406e_ranges[] = {
-	{ { }, 0, {0, 0} },	/* none */
-	{ { }, 0x1, {0x7e0000, 64 * 2 * 1024} },	/* blocks 126-127 */
-	{ { }, 0x2, {0x7c0000, 64 * 4 * 1024} },	/* blocks 124-127 */
-	{ { }, 0x3, {0x7a0000, 64 * 8 * 1024} },	/* blocks 120-127 */
-	{ { }, 0x4, {0x700000, 64 * 16 * 1024} },	/* blocks 112-127 */
-	{ { }, 0x5, {0x600000, 64 * 32 * 1024} },	/* blocks 96-127 */
-	{ { }, 0x6, {0x400000, 64 * 64 * 1024} },	/* blocks 64-127 */
-
-	{ { }, 0x7, {0x000000, 64 * 128 * 1024} },	/* all */
-	{ { }, 0x8, {0x000000, 64 * 128 * 1024} },	/* all */
-	{ { }, 0x9, {0x000000, 64 * 64 * 1024} },	/* blocks 0-63 */
-	{ { }, 0xa, {0x000000, 64 * 96 * 1024} },	/* blocks 0-95 */
-	{ { }, 0xb, {0x000000, 64 * 112 * 1024} },	/* blocks 0-111 */
-	{ { }, 0xc, {0x000000, 64 * 120 * 1024} },	/* blocks 0-119 */
-	{ { }, 0xd, {0x000000, 64 * 124 * 1024} },	/* blocks 0-123 */
-	{ { }, 0xe, {0x000000, 64 * 126 * 1024} },	/* blocks 0-125 */
-	{ { }, 0xf, {0x000000, 64 * 128 * 1024} },	/* all */
-};
-
-static struct generic_wp mx25l6406e_wp = {
-	.sr1 = { .bp0_pos = 2, .bp_bits = 4, .srp_pos = 7 },
-	.ranges = &mx25l6406e_ranges[0],
-};
-
-struct generic_range mx25l6495f_tb0_ranges[] = {
-	{ { }, 0, {0, 0} },	/* none */
-	{ { }, 0x1, {0x7f0000, 64 * 1 * 1024} },	/* block 127 */
-	{ { }, 0x2, {0x7e0000, 64 * 2 * 1024} },	/* blocks 126-127 */
-	{ { }, 0x3, {0x7c0000, 64 * 4 * 1024} },	/* blocks 124-127 */
-
-	{ { }, 0x4, {0x780000, 64 * 8 * 1024} },	/* blocks 120-127 */
-	{ { }, 0x5, {0x700000, 64 * 16 * 1024} },	/* blocks 112-127 */
-	{ { }, 0x6, {0x600000, 64 * 32 * 1024} },	/* blocks 96-127 */
-	{ { }, 0x7, {0x400000, 64 * 64 * 1024} },	/* blocks 64-127 */
-	{ { }, 0x8, {0x000000, 64 * 128 * 1024} },	/* all */
-	{ { }, 0x9, {0x000000, 64 * 128 * 1024} },	/* all */
-	{ { }, 0xa, {0x000000, 64 * 128 * 1024} },	/* all */
-	{ { }, 0xb, {0x000000, 64 * 128 * 1024} },	/* all */
-	{ { }, 0xc, {0x000000, 64 * 128 * 1024} },	/* all */
-	{ { }, 0xd, {0x000000, 64 * 128 * 1024} },	/* all */
-	{ { }, 0xe, {0x000000, 64 * 128 * 1024} },	/* all */
-	{ { }, 0xf, {0x000000, 64 * 128 * 1024} },	/* all */
-};
-
-struct generic_range mx25l6495f_tb1_ranges[] = {
-	{ { }, 0, {0, 0} },	/* none */
-	{ { }, 0x1, {0x000000, 64 * 1 * 1024} },	/* block 0 */
-	{ { }, 0x2, {0x000000, 64 * 2 * 1024} },	/* blocks 0-1 */
-	{ { }, 0x3, {0x000000, 64 * 4 * 1024} },	/* blocks 0-3 */
-	{ { }, 0x4, {0x000000, 64 * 8 * 1024} },	/* blocks 0-7 */
-	{ { }, 0x5, {0x000000, 64 * 16 * 1024} },	/* blocks 0-15 */
-	{ { }, 0x6, {0x000000, 64 * 32 * 1024} },	/* blocks 0-31 */
-	{ { }, 0x7, {0x000000, 64 * 64 * 1024} },	/* blocks 0-63 */
-	{ { }, 0x8, {0x000000, 64 * 128 * 1024} },	/* all */
-	{ { }, 0x9, {0x000000, 64 * 128 * 1024} },	/* all */
-	{ { }, 0xa, {0x000000, 64 * 128 * 1024} },	/* all */
-	{ { }, 0xb, {0x000000, 64 * 128 * 1024} },	/* all */
-	{ { }, 0xc, {0x000000, 64 * 128 * 1024} },	/* all */
-	{ { }, 0xd, {0x000000, 64 * 128 * 1024} },	/* all */
-	{ { }, 0xe, {0x000000, 64 * 128 * 1024} },	/* all */
-	{ { }, 0xf, {0x000000, 64 * 128 * 1024} },	/* all */
-};
-
-static struct generic_wp mx25l6495f_wp = {
-	.sr1 = { .bp0_pos = 2, .bp_bits = 4, .srp_pos = 7 },
-};
-
-struct generic_range s25fs128s_ranges[] = {
-	{ { .tb = 1 }, 0, {0, 0} },	/* none */
-	{ { .tb = 1 }, 0x1, {0x000000, 256 * 1024} },	/* lower 64th */
-	{ { .tb = 1 }, 0x2, {0x000000, 512 * 1024} },	/* lower 32nd */
-	{ { .tb = 1 }, 0x3, {0x000000, 1024 * 1024} },	/* lower 16th */
-	{ { .tb = 1 }, 0x4, {0x000000, 2048 * 1024} },	/* lower 8th */
-	{ { .tb = 1 }, 0x5, {0x000000, 4096 * 1024} },	/* lower 4th */
-	{ { .tb = 1 }, 0x6, {0x000000, 8192 * 1024} },	/* lower half */
-	{ { .tb = 1 }, 0x7, {0x000000, 16384 * 1024} },	/* all */
-
-	{ { .tb = 0 }, 0, {0, 0} },	/* none */
-	{ { .tb = 0 }, 0x1, {0xfc0000, 256 * 1024} },	/* upper 64th */
-	{ { .tb = 0 }, 0x2, {0xf80000, 512 * 1024} },	/* upper 32nd */
-	{ { .tb = 0 }, 0x3, {0xf00000, 1024 * 1024} },	/* upper 16th */
-	{ { .tb = 0 }, 0x4, {0xe00000, 2048 * 1024} },	/* upper 8th */
-	{ { .tb = 0 }, 0x5, {0xc00000, 4096 * 1024} },	/* upper 4th */
-	{ { .tb = 0 }, 0x6, {0x800000, 8192 * 1024} },	/* upper half */
-	{ { .tb = 0 }, 0x7, {0x000000, 16384 * 1024} },	/* all */
-};
-
-static struct generic_wp s25fs128s_wp = {
-	.sr1 = { .bp0_pos = 2, .bp_bits = 3, .srp_pos = 7 },
-	.get_modifier_bits = s25f_get_modifier_bits,
-	.set_modifier_bits = s25f_set_modifier_bits,
-};
-
-
-struct generic_range s25fl256s_ranges[] = {
-	{ { .tb = 1 }, 0, {0, 0} },	/* none */
-	{ { .tb = 1 }, 0x1, {0x000000, 512 * 1024} },		/* lower 64th */
-	{ { .tb = 1 }, 0x2, {0x000000, 1024 * 1024} },		/* lower 32nd */
-	{ { .tb = 1 }, 0x3, {0x000000, 2048 * 1024} },		/* lower 16th */
-	{ { .tb = 1 }, 0x4, {0x000000, 4096 * 1024} },		/* lower 8th */
-	{ { .tb = 1 }, 0x5, {0x000000, 8192 * 1024} },		/* lower 4th */
-	{ { .tb = 1 }, 0x6, {0x000000, 16384 * 1024} },		/* lower half */
-	{ { .tb = 1 }, 0x7, {0x000000, 32768 * 1024} },		/* all */
-
-	{ { .tb = 0 }, 0, {0, 0} },	/* none */
-	{ { .tb = 0 }, 0x1, {0x1f80000, 512 * 1024} },		/* upper 64th */
-	{ { .tb = 0 }, 0x2, {0x1f00000, 1024 * 1024} },		/* upper 32nd */
-	{ { .tb = 0 }, 0x3, {0x1e00000, 2048 * 1024} },		/* upper 16th */
-	{ { .tb = 0 }, 0x4, {0x1c00000, 4096 * 1024} },		/* upper 8th */
-	{ { .tb = 0 }, 0x5, {0x1800000, 8192 * 1024} },		/* upper 4th */
-	{ { .tb = 0 }, 0x6, {0x1000000, 16384 * 1024} },	/* upper half */
-	{ { .tb = 0 }, 0x7, {0x000000, 32768 * 1024} },		/* all */
-};
-
-static struct generic_wp s25fl256s_wp = {
-	.sr1 = { .bp0_pos = 2, .bp_bits = 3, .srp_pos = 7 },
-	.get_modifier_bits = s25f_get_modifier_bits,
-	.set_modifier_bits = s25f_set_modifier_bits,
-};
-
-/* Given a flash chip, this function returns its writeprotect info. */
-static int generic_range_table(const struct flashchip *flash,
-                           struct generic_wp **wp,
-                           int *num_entries)
-{
-	*wp = NULL;
-	*num_entries = 0;
-
-	switch (flash->manufacture_id) {
-	case GIGADEVICE_ID:
-		switch(flash->model_id) {
-		case GIGADEVICE_GD25Q32: {
-			uint8_t sr1 = w25q_read_status_register_2();
-
-			*wp = &gd25q32_wp;
-			if (!(sr1 & (1 << 6))) {	/* CMP == 0 */
-				(*wp)->ranges = &gd25q32_cmp0_ranges[0];
-				*num_entries = ARRAY_SIZE(gd25q32_cmp0_ranges);
-			} else {			/* CMP == 1 */
-				(*wp)->ranges = &gd25q32_cmp1_ranges[0];
-				*num_entries = ARRAY_SIZE(gd25q32_cmp1_ranges);
-			}
-
-			break;
-		/* TODO(shawnn): add support for other GD parts */
-		}
-		default:
-			msg_cerr("%s() %d: GigaDevice flash chip mismatch"
-				 " (0x%04x), aborting\n", __func__, __LINE__,
-				 flash->model_id);
-			return -1;
-		}
-		break;
-	case MACRONIX_ID:
-		switch (flash->model_id) {
-		case MACRONIX_MX25L6405:
-			/* FIXME: MX25L64* chips have mixed capabilities and
-			   share IDs */
-			*wp = &mx25l6406e_wp;
-			*num_entries = ARRAY_SIZE(mx25l6406e_ranges);
-			break;
-		case MACRONIX_MX25L6495F: {
-			uint8_t cr = mx25l_read_config_register();
-
-			*wp = &mx25l6495f_wp;
-			if (!(cr & (1 << 3))) {	/* T/B == 0 */
-				(*wp)->ranges = &mx25l6495f_tb0_ranges[0];
-				*num_entries = ARRAY_SIZE(mx25l6495f_tb0_ranges);
-			} else {		/* T/B == 1 */
-				(*wp)->ranges = &mx25l6495f_tb1_ranges[0];
-				*num_entries = ARRAY_SIZE(mx25l6495f_tb1_ranges);
-			}
-			break;
-		 }
-		default:
-			msg_cerr("%s():%d: MXIC flash chip mismatch (0x%04x)"
-			         ", aborting\n", __func__, __LINE__,
-			         flash->model_id);
-			return -1;
-		}
-		break;
-	case SPANSION_ID:
-		switch (flash->model_id) {
-		case SPANSION_S25FS128S_L:
-		case SPANSION_S25FS128S_S: {
-			*wp = &s25fs128s_wp;
-			(*wp)->ranges = s25fs128s_ranges;
-			*num_entries = ARRAY_SIZE(s25fs128s_ranges);
-			break;
-		}
-		case SPANSION_S25FL256S_UL:
-		case SPANSION_S25FL256S_US: {
-			*wp = &s25fl256s_wp;
-			(*wp)->ranges = s25fl256s_ranges;
-			*num_entries = ARRAY_SIZE(s25fl256s_ranges);
-			break;
-		}
-		default:
-			msg_cerr("%s():%d Spansion flash chip mismatch (0x%04x)"
-				", aborting\n", __func__, __LINE__, flash->model_id);
-			return -1;
-		}
-		break;
-	default:
-		msg_cerr("%s: flash vendor (0x%x) not found, aborting\n",
-		         __func__, flash->manufacture_id);
-		return -1;
-	}
-
-	return 0;
-}
-
-/* Given a [start, len], this function finds a block protect bit combination
- * (if possible) and sets the corresponding bits in "status". Remaining bits
- * are preserved. */
-static int generic_range_to_status(const struct flashchip *flash,
-                        unsigned int start, unsigned int len,
-                        uint8_t *status)
-{
-	struct generic_wp *wp;
-	struct generic_range *r;
-	int i, range_found = 0, num_entries;
-	uint8_t bp_mask;
-
-	if (generic_range_table(flash, &wp, &num_entries))
-		return -1;
-
-	bp_mask = ((1 << (wp->sr1.bp0_pos + wp->sr1.bp_bits)) - 1) - \
-		  ((1 << wp->sr1.bp0_pos) - 1);
-
-	for (i = 0, r = &wp->ranges[0]; i < num_entries; i++, r++) {
-		msg_cspew("comparing range 0x%x 0x%x / 0x%x 0x%x\n",
-			  start, len, r->range.start, r->range.len);
-		if ((start == r->range.start) && (len == r->range.len)) {
-			*status &= ~(bp_mask);
-			*status |= r->bp << (wp->sr1.bp0_pos);
-
-			if (wp->set_modifier_bits) {
-				if (wp->set_modifier_bits(flash, &r->m) < 0) {
-					msg_cerr("error setting modifier "
-						"bits for range.\n");
-					return -1;
-				}
-			}
-
-			range_found = 1;
-			break;
-		}
-	}
-
-	if (!range_found) {
-		msg_cerr("matching range not found\n");
-		return -1;
-	}
-	return 0;
-}
-
-static int generic_status_to_range(const struct flashchip *flash,
-		const uint8_t sr1, unsigned int *start, unsigned int *len)
-{
-	struct generic_wp *wp;
-	struct generic_range *r;
-	int num_entries, i, status_found = 0;
-	uint8_t sr1_bp;
-	struct generic_modifier_bits m;
-
-	if (generic_range_table(flash, &wp, &num_entries))
-		return -1;
-
-	/* modifier bits may be compared more than once, so get them here */
-	if (wp->get_modifier_bits) {
-		if (wp->get_modifier_bits(flash, &m) < 0)
-			return -1;
-	}
-
-	sr1_bp = (sr1 >> wp->sr1.bp0_pos) & ((1 << wp->sr1.bp_bits) - 1);
-
-	for (i = 0, r = &wp->ranges[0]; i < num_entries; i++, r++) {
-		if (wp->get_modifier_bits) {
-			if (memcmp(&m, &r->m, sizeof(m)))
-				continue;
-		}
-		msg_cspew("comparing  0x%02x 0x%02x\n", sr1_bp, r->bp);
-		if (sr1_bp == r->bp) {
-			*start = r->range.start;
-			*len = r->range.len;
-			status_found = 1;
-			break;
-		}
-	}
-
-	if (!status_found) {
-		msg_cerr("matching status not found\n");
-		return -1;
-	}
-	return 0;
-}
-
-/* Given a [start, len], this function calls generic_range_to_status() to
- * convert it to flash-chip-specific range bits, then sets into status register.
- */
-static int generic_set_range(const struct flashchip *flash,
-                         unsigned int start, unsigned int len)
-{
-	uint8_t status, expected;
-
-	status = spi_read_status_register();
-	msg_cdbg("%s: old status: 0x%02x\n", __func__, status);
-
-	expected = status;	/* preserve non-bp bits */
-	if (generic_range_to_status(flash, start, len, &expected))
-		return -1;
-
-	spi_write_status_register(flash, expected);
-
-	status = spi_read_status_register();
-	msg_cdbg("%s: new status: 0x%02x\n", __func__, status);
-	if (status != expected) {
-		msg_cerr("expected=0x%02x, but actual=0x%02x.\n",
-		          expected, status);
-		return 1;
-	}
-
-	return 0;
-}
-
-/* Set/clear the status regsiter write protect bit in SR1. */
-static int generic_set_srp0(const struct flashchip *flash, int enable)
-{
-	uint8_t status, expected;
-	struct generic_wp *wp;
-	int num_entries;
-
-	if (generic_range_table(flash, &wp, &num_entries))
-		return -1;
-
-	expected = spi_read_status_register();
-	msg_cdbg("%s: old status: 0x%02x\n", __func__, expected);
-
-	if (enable)
-		expected |= 1 << wp->sr1.srp_pos;
-	else
-		expected &= ~(1 << wp->sr1.srp_pos);
-
-	spi_write_status_register(flash, expected);
-
-	status = spi_read_status_register();
-	msg_cdbg("%s: new status: 0x%02x\n", __func__, status);
-	if (status != expected)
-		return -1;
-
-	return 0;
-}
-
-static int generic_enable_writeprotect(const struct flashchip *flash,
-		enum wp_mode wp_mode)
-{
-	int ret;
-
-	switch (wp_mode) {
-	case WP_MODE_HARDWARE:
-		ret = generic_set_srp0(flash, 1);
-		break;
-	default:
-		msg_cerr("%s(): unsupported write-protect mode\n", __func__);
-		return 1;
-	}
-
-	if (ret)
-		msg_cerr("%s(): error=%d.\n", __func__, ret);
-	return ret;
-}
-
-static int generic_disable_writeprotect(const struct flashchip *flash)
-{
-	int ret;
-
-	ret = generic_set_srp0(flash, 0);
-	if (ret)
-		msg_cerr("%s(): error=%d.\n", __func__, ret);
-	return ret;
-}
-
-static int generic_list_ranges(const struct flashchip *flash)
-{
-	struct generic_wp *wp;
-	struct generic_range *r;
-	int i, num_entries;
-
-	if (generic_range_table(flash, &wp, &num_entries))
-		return -1;
-
-	r = &wp->ranges[0];
-	for (i = 0; i < num_entries; i++) {
-		msg_cinfo("start: 0x%06x, length: 0x%06x\n",
-		          r->range.start, r->range.len);
-		r++;
-	}
-
-	return 0;
-}
-
-static int generic_wp_status(const struct flashchip *flash)
-{
-	uint8_t sr1;
-	unsigned int start, len;
-	int ret = 0;
-	struct generic_wp *wp;
-	int num_entries, wp_en;
-
-	if (generic_range_table(flash, &wp, &num_entries))
-		return -1;
-
-	sr1 = spi_read_status_register();
-	wp_en = (sr1 >> wp->sr1.srp_pos) & 1;
-
-	msg_cinfo("WP: status: 0x%04x\n", sr1);
-	msg_cinfo("WP: status.srp0: %x\n", wp_en);
-	/* FIXME: SRP1 is not really generic, but we probably should print
-	 * it anyway to have consistent output. #legacycruft */
-	msg_cinfo("WP: status.srp1: %x\n", 0);
-	msg_cinfo("WP: write protect is %s.\n",
-		          wp_en ? "enabled" : "disabled");
-
-	msg_cinfo("WP: write protect range: ");
-	if (generic_status_to_range(flash, sr1, &start, &len)) {
-		msg_cinfo("(cannot resolve the range)\n");
-		ret = -1;
-	} else {
-		msg_cinfo("start=0x%08x, len=0x%08x\n", start, len);
-	}
+	if (ret == FLASHROM_WP_OK)
+		ret = get_wp_mode(&cfg->mode, &bits);
 
 	return ret;
 }
 
-struct wp wp_generic = {
-	.list_ranges	= generic_list_ranges,
-	.set_range	= generic_set_range,
-	.enable		= generic_enable_writeprotect,
-	.disable	= generic_disable_writeprotect,
-	.wp_status	= generic_wp_status,
-};
+enum flashrom_wp_result wp_write_cfg(struct flashctx *flash, const struct flashrom_wp_cfg *cfg)
+{
+	struct wp_bits bits;
+	enum flashrom_wp_result ret = FLASHROM_WP_OK;
+
+	if (!chip_supported(flash))
+		ret = FLASHROM_WP_ERR_CHIP_UNSUPPORTED;
+
+	if (ret == FLASHROM_WP_OK)
+		ret = read_wp_bits(&bits, flash);
+
+	/* Set protection range */
+	if (ret == FLASHROM_WP_OK)
+		ret = set_wp_range(&bits, flash, cfg->range);
+	if (ret == FLASHROM_WP_OK)
+		ret = write_wp_bits(flash, bits);
+
+	/* Set protection mode */
+	if (ret == FLASHROM_WP_OK)
+		ret = set_wp_mode(&bits, cfg->mode);
+	if (ret == FLASHROM_WP_OK)
+		ret = write_wp_bits(flash, bits);
+
+	return ret;
+}
+
+enum flashrom_wp_result wp_get_available_ranges(struct flashrom_wp_ranges **list, struct flashrom_flashctx *flash)
+{
+	struct wp_bits bits;
+	struct wp_range_and_bits *range_pairs = NULL;
+	size_t count;
+
+	if (!chip_supported(flash))
+		return FLASHROM_WP_ERR_CHIP_UNSUPPORTED;
+
+	enum flashrom_wp_result ret = read_wp_bits(&bits, flash);
+	if (ret != FLASHROM_WP_OK)
+		return ret;
+
+	ret = get_ranges_and_wp_bits(flash, bits, &range_pairs, &count);
+	if (ret != FLASHROM_WP_OK)
+		return ret;
+
+	*list = calloc(1, sizeof(struct flashrom_wp_ranges));
+	struct wp_range *ranges = calloc(count, sizeof(struct wp_range));
+
+	if (!(*list) || !ranges) {
+		free(*list);
+		free(ranges);
+		ret = FLASHROM_WP_ERR_OTHER;
+		goto out;
+	}
+	(*list)->count = count;
+	(*list)->ranges = ranges;
+
+	for (size_t i = 0; i < count; i++)
+		ranges[i] = range_pairs[i].range;
+
+out:
+	free(range_pairs);
+	return ret;
+}
+
+enum flashrom_wp_result wp_cfg_to_reg_values(
+		uint8_t *reg_values, uint8_t *bit_masks, uint8_t *write_masks,
+		struct flashctx *flash, const struct flashrom_wp_cfg *cfg)
+{
+	struct wp_bits bits;
+
+	if (!chip_supported(flash))
+		return FLASHROM_WP_ERR_CHIP_UNSUPPORTED;
+
+	enum flashrom_wp_result ret = read_wp_bits(&bits, flash);
+	if (ret != FLASHROM_WP_OK)
+		return ret;
+
+	/* Set protection range */
+	ret = set_wp_range(&bits, flash, cfg->range);
+	if (ret != FLASHROM_WP_OK)
+		return ret;
+
+	/* Set protection mode */
+	ret = set_wp_mode(&bits, cfg->mode);
+	if (ret != FLASHROM_WP_OK)
+		return ret;
+
+	get_wp_bits_reg_values(reg_values, bit_masks, write_masks, &flash->chip->reg_bits, bits);
+
+	return FLASHROM_WP_OK;
+}

@@ -11,100 +11,262 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ */
+
+/* Driver for various LPT adapters.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
- */
-
-/* Driver for the SPIPGM hardware by "RayeR" Martin Rehak.
- * See http://rayer.ic.cz/elektro/spipgm.htm for schematics and instructions.
- */
-
-/* This driver uses non-portable direct I/O port accesses which won't work on
+ * This driver uses non-portable direct I/O port accesses which won't work on
  * any non-x86 platform, and even on x86 there is a high chance there will be
  * collisions with any loaded parallel port drivers.
  * The big advantage of direct port I/O is OS independence and speed because
  * most OS parport drivers will perform many unnecessary accesses although
  * this driver just treats the parallel port as a GPIO set.
  */
-#if defined(__i386__) || defined(__x86_64__)
 
 #include <stdlib.h>
+#include <strings.h>
 #include <string.h>
 #include "flash.h"
 #include "programmer.h"
-
-enum rayer_type {
-	TYPE_RAYER,
-	TYPE_XILINX_DLC5,
-};
+#include "hwaccess_x86_io.h"
 
 /* We have two sets of pins, out and in. The numbers for both sets are
  * independent and are bitshift values, not real pin numbers.
  * Default settings are for the RayeR hardware.
  */
-/* Pins for master->slave direction */
-static int rayer_cs_bit = 5;
-static int rayer_sck_bit = 6;
-static int rayer_mosi_bit = 7;
-/* Pins for slave->master direction */
-static int rayer_miso_bit = 6;
 
-static uint16_t lpt_iobase;
+struct rayer_programmer {
+	const char *type;
+	const enum test_state status;
+	const char *description;
+	const void *dev_data;
+};
 
-/* Cached value of last byte sent. */
-static uint8_t lpt_outbyte;
+struct rayer_pinout {
+	uint8_t cs_bit;
+	uint8_t sck_bit;
+	uint8_t mosi_bit;
+	uint8_t miso_bit;
+	void (*preinit)(void *);
+	int (*shutdown)(void *);
+};
 
-static void rayer_bitbang_set_cs(int val)
+struct rayer_spi_data {
+	uint16_t lpt_iobase;
+	/* Cached value of last byte sent. */
+	uint8_t lpt_outbyte;
+
+	const struct rayer_pinout *pinout;
+};
+
+static const struct rayer_pinout rayer_spipgm = {
+	.cs_bit = 5,
+	.sck_bit = 6,
+	.mosi_bit = 7,
+	.miso_bit = 6,
+};
+
+static void dlc5_preinit(void *spi_data)
 {
-	lpt_outbyte &= ~(1 << rayer_cs_bit);
-	lpt_outbyte |= (val << rayer_cs_bit);
-	OUTB(lpt_outbyte, lpt_iobase);
+	struct rayer_spi_data *data = spi_data;
+
+	msg_pdbg("dlc5_preinit\n");
+	/* Assert pin 6 to receive MISO. */
+	data->lpt_outbyte |= (1<<4);
+	OUTB(data->lpt_outbyte, data->lpt_iobase);
 }
 
-static void rayer_bitbang_set_sck(int val)
+static int dlc5_shutdown(void *spi_data)
 {
-	lpt_outbyte &= ~(1 << rayer_sck_bit);
-	lpt_outbyte |= (val << rayer_sck_bit);
-	OUTB(lpt_outbyte, lpt_iobase);
+	struct rayer_spi_data *data = spi_data;
+
+	msg_pdbg("dlc5_shutdown\n");
+	/* De-assert pin 6 to force MISO low. */
+	data->lpt_outbyte &= ~(1<<4);
+	OUTB(data->lpt_outbyte, data->lpt_iobase);
+
+	free(data);
+	return 0;
 }
 
-static void rayer_bitbang_set_mosi(int val)
+static const struct rayer_pinout xilinx_dlc5 = {
+	.cs_bit = 2,
+	.sck_bit = 1,
+	.mosi_bit = 0,
+	.miso_bit = 4,
+	.preinit =  dlc5_preinit,
+	.shutdown = dlc5_shutdown,
+};
+
+static void byteblaster_preinit(void *spi_data)
 {
-	lpt_outbyte &= ~(1 << rayer_mosi_bit);
-	lpt_outbyte |= (val << rayer_mosi_bit);
-	OUTB(lpt_outbyte, lpt_iobase);
+	struct rayer_spi_data *data = spi_data;
+
+	msg_pdbg("byteblaster_preinit\n");
+	/* Assert #EN signal. */
+	OUTB(2, data->lpt_iobase + 2 );
 }
 
-static int rayer_bitbang_get_miso(void)
+static int byteblaster_shutdown(void *spi_data)
 {
+	struct rayer_spi_data *data = spi_data;
+
+	msg_pdbg("byteblaster_shutdown\n");
+	/* De-Assert #EN signal. */
+	OUTB(0, data->lpt_iobase + 2 );
+
+	free(data);
+	return 0;
+}
+
+static const struct rayer_pinout altera_byteblastermv = {
+	.cs_bit = 1,
+	.sck_bit = 0,
+	.mosi_bit = 6,
+	.miso_bit = 7,
+	.preinit =  byteblaster_preinit,
+	.shutdown = byteblaster_shutdown,
+};
+
+static void stk200_preinit(void *spi_data)
+{
+	struct rayer_spi_data *data = spi_data;
+
+	msg_pdbg("stk200_init\n");
+	/* Assert #EN signals, set LED signal. */
+	data->lpt_outbyte = (1 << 6) ;
+	OUTB(data->lpt_outbyte, data->lpt_iobase);
+}
+
+static int stk200_shutdown(void *spi_data)
+{
+	struct rayer_spi_data *data = spi_data;
+
+	msg_pdbg("stk200_shutdown\n");
+	/* Assert #EN signals, clear LED signal. */
+	data->lpt_outbyte = (1 << 2) | (1 << 3);
+	OUTB(data->lpt_outbyte, data->lpt_iobase);
+
+	free(data);
+	return 0;
+}
+
+static const struct rayer_pinout atmel_stk200 = {
+	.cs_bit = 7,
+	.sck_bit = 4,
+	.mosi_bit = 5,
+	.miso_bit = 6,
+	.preinit =  stk200_preinit,
+	.shutdown = stk200_shutdown,
+};
+
+static const struct rayer_pinout wiggler_lpt = {
+	.cs_bit = 1,
+	.sck_bit = 2,
+	.mosi_bit = 3,
+	.miso_bit = 7,
+};
+
+static const struct rayer_pinout spi_tt = {
+	.cs_bit = 2,
+	.sck_bit = 0,
+	.mosi_bit = 4,
+	.miso_bit = 7,
+};
+
+static void rayer_bitbang_set_cs(int val, void *spi_data)
+{
+	struct rayer_spi_data *data = spi_data;
+
+	data->lpt_outbyte &= ~(1 << data->pinout->cs_bit);
+	data->lpt_outbyte |= (val << data->pinout->cs_bit);
+	OUTB(data->lpt_outbyte, data->lpt_iobase);
+}
+
+static void rayer_bitbang_set_sck(int val, void *spi_data)
+{
+	struct rayer_spi_data *data = spi_data;
+
+	data->lpt_outbyte &= ~(1 << data->pinout->sck_bit);
+	data->lpt_outbyte |= (val << data->pinout->sck_bit);
+	OUTB(data->lpt_outbyte, data->lpt_iobase);
+}
+
+static void rayer_bitbang_set_mosi(int val, void *spi_data)
+{
+	struct rayer_spi_data *data = spi_data;
+
+	data->lpt_outbyte &= ~(1 << data->pinout->mosi_bit);
+	data->lpt_outbyte |= (val << data->pinout->mosi_bit);
+	OUTB(data->lpt_outbyte, data->lpt_iobase);
+}
+
+static int rayer_bitbang_get_miso(void *spi_data)
+{
+	struct rayer_spi_data *data = spi_data;
 	uint8_t tmp;
 
-	tmp = INB(lpt_iobase + 1);
-	tmp = (tmp >> rayer_miso_bit) & 0x1;
+	tmp = INB(data->lpt_iobase + 1) ^ 0x80; // bit.7 inverted
+	tmp = (tmp >> data->pinout->miso_bit) & 0x1;
 	return tmp;
 }
 
+static int rayer_shutdown(void *spi_data)
+{
+	free(spi_data);
+	return 0;
+}
+
 static const struct bitbang_spi_master bitbang_spi_master_rayer = {
-	.type = BITBANG_SPI_MASTER_RAYER,
-	.set_cs = rayer_bitbang_set_cs,
-	.set_sck = rayer_bitbang_set_sck,
-	.set_mosi = rayer_bitbang_set_mosi,
-	.get_miso = rayer_bitbang_get_miso,
+	.set_cs		= rayer_bitbang_set_cs,
+	.set_sck	= rayer_bitbang_set_sck,
+	.set_mosi	= rayer_bitbang_set_mosi,
+	.get_miso	= rayer_bitbang_get_miso,
+	.half_period	= 0,
 };
 
-int rayer_spi_init(void)
+static const struct rayer_programmer *find_progtype(const char *prog_type)
 {
-	char *arg = NULL;
-	enum rayer_type rayer_type = TYPE_RAYER;
+	static const struct rayer_programmer rayer_spi_types[] = {
+		{"rayer",		NT,	"RayeR SPIPGM",					&rayer_spipgm},
+		{"xilinx",		NT,	"Xilinx Parallel Cable III (DLC 5)",		&xilinx_dlc5},
+		{"byteblastermv",	OK,	"Altera ByteBlasterMV",				&altera_byteblastermv},
+		{"stk200",		NT,	"Atmel STK200/300 adapter",			&atmel_stk200},
+		{"wiggler",		OK,	"Wiggler LPT",					&wiggler_lpt},
+		{"spi_tt",		NT,	"SPI Tiny Tools (SPI_TT LPT)",			&spi_tt},
+		{0},
+	};
+	if (!prog_type)
+		return &rayer_spi_types[0];
+
+	const struct rayer_programmer *prog = rayer_spi_types;
+	for (; prog->type != NULL; prog++) {
+		if (strcasecmp(prog_type, prog->type) == 0) {
+			break;
+		}
+	}
+
+	if (!prog->type) {
+		msg_perr("Error: Invalid device type specified.\n");
+		return NULL;
+	}
+
+	return prog;
+}
+
+static int get_params(const struct programmer_cfg *cfg, uint16_t *lpt_iobase,
+		      const struct rayer_programmer **prog)
+{
+	/* Pick a default value for the I/O base. */
+	*lpt_iobase = 0x378;
+	/* no programmer type specified. */
+	*prog = NULL;
 
 	/* Non-default port requested? */
-	arg = extract_programmer_param("iobase");
+	char *arg = extract_programmer_param_str(cfg, "iobase");
 	if (arg) {
 		char *endptr = NULL;
-		unsigned long tmp;
-		tmp = strtoul(arg, &endptr, 0);
+		unsigned long tmp = strtoul(arg, &endptr, 0);
 		/* Port 0, port >0x10000, unaligned ports and garbage strings
 		 * are rejected.
 		 */
@@ -118,66 +280,68 @@ int rayer_spi_init(void)
 				 "given was invalid.\nIt must be a multiple of "
 				 "0x4 and lie between 0x100 and 0xfffc.\n");
 			free(arg);
-			return 1;
+			return -1;
 		} else {
-			lpt_iobase = (uint16_t)tmp;
+			*lpt_iobase = (uint16_t)tmp;
 			msg_pinfo("Non-default I/O base requested. This will "
 				  "not change the hardware settings.\n");
 		}
-	} else {
-		/* Pick a default value for the I/O base. */
-		lpt_iobase = 0x378;
+		free(arg);
 	}
+
+	arg = extract_programmer_param_str(cfg, "type");
+	*prog = find_progtype(arg);
 	free(arg);
-	
+
+	return *prog ? 0 : -1;
+}
+
+static int rayer_spi_init(const struct programmer_cfg *cfg)
+{
+	const struct rayer_programmer *prog;
+	struct rayer_pinout *pinout = NULL;
+	uint16_t lpt_iobase;
+
+	if (get_params(cfg, &lpt_iobase, &prog) < 0)
+		return 1;
+
 	msg_pdbg("Using address 0x%x as I/O base for parallel port access.\n",
 		 lpt_iobase);
 
-	arg = extract_programmer_param("type");
-	if (arg) {
-		if (!strcasecmp(arg, "rayer")) {
-			rayer_type = TYPE_RAYER;
-		} else if (!strcasecmp(arg, "xilinx")) {
-			rayer_type = TYPE_XILINX_DLC5;
-		} else {
-			msg_perr("Error: Invalid device type specified.\n");
-			free(arg);
-			return 1;
-		}
-	}
-	free(arg);
-	switch (rayer_type) {
-	case TYPE_RAYER:
-		msg_pdbg("Using RayeR SPIPGM pinout.\n");
-		/* Bits for master->slave direction */
-		rayer_cs_bit = 5;
-		rayer_sck_bit = 6;
-		rayer_mosi_bit = 7;
-		/* Bits for slave->master direction */
-		rayer_miso_bit = 6;
-		break;
-	case TYPE_XILINX_DLC5:
-		msg_pdbg("Using Xilinx Parallel Cable III (DLC 5) pinout.\n");
-		/* Bits for master->slave direction */
-		rayer_cs_bit = 2;
-		rayer_sck_bit = 1;
-		rayer_mosi_bit = 0;
-		/* Bits for slave->master direction */
-		rayer_miso_bit = 4;
-	}
+	msg_pinfo("Using %s pinout.\n", prog->description);
+	pinout = (struct rayer_pinout *)prog->dev_data;
 
-	get_io_perms();
+	if (rget_io_perms())
+		return 1;
 
+	struct rayer_spi_data *data = calloc(1, sizeof(*data));
+	if (!data) {
+		msg_perr("Unable to allocate space for SPI master data\n");
+		return 1;
+	}
+	data->pinout = pinout;
+	data->lpt_iobase = lpt_iobase;
 	/* Get the initial value before writing to any line. */
-	lpt_outbyte = INB(lpt_iobase);
+	data->lpt_outbyte = INB(lpt_iobase);
 
-	/* Zero halfperiod delay. */
-	if (bitbang_spi_init(&bitbang_spi_master_rayer, 0))
+	if (pinout->shutdown)
+		register_shutdown(pinout->shutdown, data);
+	else
+		register_shutdown(rayer_shutdown, data);
+
+	if (pinout->preinit)
+		pinout->preinit(data);
+
+	if (register_spi_bitbang_master(&bitbang_spi_master_rayer, data))
 		return 1;
 
 	return 0;
 }
 
-#else
-#error PCI port I/O access is not supported on this architecture yet.
-#endif
+const struct programmer_entry programmer_rayer_spi = {
+	.name			= "rayer_spi",
+	.type			= OTHER,
+				/* FIXME */
+	.devs.note		= "RayeR parallel port programmer\n",
+	.init			= rayer_spi_init,
+};

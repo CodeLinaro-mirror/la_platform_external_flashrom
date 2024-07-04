@@ -1,47 +1,31 @@
 /*
  * This file is part of the flashrom project.
  *
- * Copyright (C) 2014 Google Inc.
+ * Copyright (C) 2014 Google LLC.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *
- * Redistributions in binary form must reproduce the above copyright
- * notice, this list of conditions and the following disclaimer in the
- * documentation and/or other materials provided with the distribution.
- *
- * Neither the name of Google or the names of contributors or
- * licensors may be used to endorse or promote products derived from this
- * software without specific prior written permission.
- *
- * This software is provided "AS IS," without a warranty of any kind.
- * ALL EXPRESS OR IMPLIED CONDITIONS, REPRESENTATIONS AND WARRANTIES,
- * INCLUDING ANY IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A
- * PARTICULAR PURPOSE OR NON-INFRINGEMENT, ARE HEREBY EXCLUDED.
- * GOOGLE INC AND ITS LICENSORS SHALL NOT BE LIABLE
- * FOR ANY DAMAGES SUFFERED BY LICENSEE AS A RESULT OF USING, MODIFYING
- * OR DISTRIBUTING THIS SOFTWARE OR ITS DERIVATIVES.  IN NO EVENT WILL
- * GOOGLE OR ITS LICENSORS BE LIABLE FOR ANY LOST REVENUE, PROFIT OR DATA,
- * OR FOR DIRECT, INDIRECT, SPECIAL, CONSEQUENTIAL, INCIDENTAL OR
- * PUNITIVE DAMAGES, HOWEVER CAUSED AND REGARDLESS OF THE THEORY OF
- * LIABILITY, ARISING OUT OF THE USE OF OR INABILITY TO USE THIS SOFTWARE,
- * EVEN IF GOOGLE HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
- *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
+
+/*
  * s25f.c - Helper functions for Spansion S25FL and S25FS SPI flash chips.
  * Uses 24 bit addressing for the FS chips and 32 bit addressing for the FL
- * chips (which is required by the overlayed sector size devices).
+ * chips (which is required by the overlaid sector size devices).
  * TODO: Implement fancy hybrid sector architecture helpers.
  */
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "chipdrivers.h"
 #include "spi.h"
-#include "writeprotect.h"
 
 /*
  * RDAR and WRAR are supported on chips which have more than one set of status
@@ -82,18 +66,17 @@
 #define S25FS_T_SE	145 * 1000	/* Sector Erase Time (145ms) */
 #define S25FL_T_SE	130 * 1000	/* Sector Erase Time (130ms) */
 
-static int s25f_legacy_software_reset(const struct flashchip *flash)
+static int s25f_legacy_software_reset(const struct flashctx *flash)
 {
-	int result;
 	struct spi_command cmds[] = {
 	{
 		.writecnt	= 1,
-		.writearr	= (const unsigned char[]){ CMD_RSTEN },
+		.writearr	= (const uint8_t[]){ CMD_RSTEN },
 		.readcnt	= 0,
 		.readarr	= NULL,
 	}, {
 		.writecnt	= 1,
-		.writearr	= (const unsigned char[]){ 0xf0 },
+		.writearr	= (const uint8_t[]){ 0xf0 },
 		.readcnt	= 0,
 		.readarr	= NULL,
 	}, {
@@ -103,7 +86,7 @@ static int s25f_legacy_software_reset(const struct flashchip *flash)
 		.readarr	= NULL,
 	}};
 
-	result = spi_send_multicommand(cmds);
+	int result = spi_send_multicommand(flash, cmds);
 	if (result) {
 		msg_cerr("%s failed during command execution\n", __func__);
 		return result;
@@ -111,24 +94,23 @@ static int s25f_legacy_software_reset(const struct flashchip *flash)
 
 	/* Allow time for reset command to execute. The datasheet specifies
 	 * Trph = 35us, double that to be safe. */
-	programmer_delay(T_RPH * 2);
+	programmer_delay(flash, T_RPH * 2);
 
 	return 0;
 }
 
 /* "Legacy software reset" is disabled by default on S25FS, use this instead. */
-static int s25fs_software_reset(struct flashchip *flash)
+static int s25fs_software_reset(struct flashctx *flash)
 {
-	int result;
 	struct spi_command cmds[] = {
 	{
 		.writecnt	= 1,
-		.writearr	= (const unsigned char[]){ CMD_RSTEN },
+		.writearr	= (const uint8_t[]){ CMD_RSTEN },
 		.readcnt	= 0,
 		.readarr	= NULL,
 	}, {
 		.writecnt	= 1,
-		.writearr	= (const unsigned char[]){ CMD_RST },
+		.writearr	= (const uint8_t[]){ CMD_RST },
 		.readcnt	= 0,
 		.readarr	= NULL,
 	}, {
@@ -138,23 +120,28 @@ static int s25fs_software_reset(struct flashchip *flash)
 		.readarr	= NULL,
 	}};
 
-	result = spi_send_multicommand(cmds);
+	int result = spi_send_multicommand(flash, cmds);
 	if (result) {
 		msg_cerr("%s failed during command execution\n", __func__);
 		return result;
 	}
 
 	/* Allow time for reset command to execute. Double tRPH to be safe. */
-	programmer_delay(T_RPH * 2);
+	programmer_delay(flash, T_RPH * 2);
 
 	return 0;
 }
 
-static int s25f_poll_status(const struct flashchip *flash)
+static int s25f_poll_status(const struct flashctx *flash)
 {
-	uint8_t tmp = spi_read_status_register();
+	while (true) {
+		uint8_t tmp;
+		if (spi_read_register(flash, STATUS1, &tmp))
+			return -1;
 
-	while (tmp & JEDEC_RDSR_BIT_WIP) {
+		if ((tmp & SPI_SR_WIP) == 0)
+			break;
+
 		/*
 		 * The WIP bit on S25F chips remains set to 1 if erase or
 		 * programming errors occur, so we must check for those
@@ -162,7 +149,7 @@ static int s25f_poll_status(const struct flashchip *flash)
 		 * reset to clear WIP and other volatile bits, otherwise
 		 * the chip will be unresponsive to further commands.
 		 */
-		if (tmp & JEDEC_RDSR_BIT_ERASE_ERR) {
+		if (tmp & SPI_SR_ERA_ERR) {
 			msg_cerr("Erase error occurred\n");
 			s25f_legacy_software_reset(flash);
 			return -1;
@@ -174,32 +161,30 @@ static int s25f_poll_status(const struct flashchip *flash)
 			return -1;
 		}
 
-		programmer_delay(1000 * 10);
-		tmp = spi_read_status_register();
+		programmer_delay(flash, 1000 * 10);
 	}
 
 	return 0;
 }
 
 /* "Read Any Register" instruction only supported on S25FS */
-static int s25fs_read_cr(const struct flashchip *flash, uint32_t addr)
+static int s25fs_read_cr(const struct flashctx *flash, uint32_t addr)
 {
-	int result;
 	uint8_t cfg;
 	/* By default, 8 dummy cycles are necessary for variable-latency
 	   commands such as RDAR (see CR2NV[3:0]). */
-	unsigned char read_cr_cmd[] = {
-					CMD_RDAR,
-					(addr >> 16) & 0xff,
-					(addr >> 8) & 0xff,
-					(addr & 0xff),
-					0x00, 0x00, 0x00, 0x00,
-					0x00, 0x00, 0x00, 0x00,
+	uint8_t read_cr_cmd[] = {
+		CMD_RDAR,
+		(addr >> 16) & 0xff,
+		(addr >> 8) & 0xff,
+		(addr & 0xff),
+		0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
 	};
 
-	result = spi_send_command(sizeof(read_cr_cmd), 1, read_cr_cmd, &cfg);
+	int result = spi_send_command(flash, sizeof(read_cr_cmd), 1, read_cr_cmd, &cfg);
 	if (result) {
-		msg_cerr("%s failed during command execution at address 0x%x\n",
+		msg_cerr("%s failed during command execution at address 0x%"PRIx32"\n",
 			__func__, addr);
 		return -1;
 	}
@@ -207,35 +192,19 @@ static int s25fs_read_cr(const struct flashchip *flash, uint32_t addr)
 	return cfg;
 }
 
-static int s25f_read_cr1(const struct flashchip *flash)
-{
-	int result;
-	uint8_t cfg;
-	unsigned char read_cr_cmd[] = { CMD_RDCR };
-
-	result = spi_send_command(sizeof(read_cr_cmd), 1, read_cr_cmd, &cfg);
-	if (result) {
-		msg_cerr("%s failed during command execution\n", __func__);
-		return -1;
-	}
-
-	return cfg;
-}
-
 /* "Write Any Register" instruction only supported on S25FS */
-static int s25fs_write_cr(const struct flashchip *flash,
-				uint32_t addr, uint8_t data)
+static int s25fs_write_cr(const struct flashctx *flash,
+			  uint32_t addr, uint8_t data)
 {
-	int result;
 	struct spi_command cmds[] = {
 	{
 		.writecnt	= JEDEC_WREN_OUTSIZE,
-		.writearr	= (const unsigned char[]){ JEDEC_WREN },
+		.writearr	= (const uint8_t[]){ JEDEC_WREN },
 		.readcnt	= 0,
 		.readarr	= NULL,
 	}, {
 		.writecnt	= CMD_WRAR_LEN,
-		.writearr	= (const unsigned char[]){
+		.writearr	= (const uint8_t[]){
 					CMD_WRAR,
 					(addr >> 16) & 0xff,
 					(addr >> 8) & 0xff,
@@ -251,55 +220,23 @@ static int s25fs_write_cr(const struct flashchip *flash,
 		.readarr	= NULL,
 	}};
 
-	result = spi_send_multicommand(cmds);
+	int result = spi_send_multicommand(flash, cmds);
 	if (result) {
-		msg_cerr("%s failed during command execution at address 0x%x\n",
+		msg_cerr("%s failed during command execution at address 0x%"PRIx32"\n",
 			__func__, addr);
 		return -1;
 	}
 
-	programmer_delay(T_W);
+	programmer_delay(flash, T_W);
 	return s25f_poll_status(flash);
 }
 
-static int s25f_write_cr1(const struct flashchip *flash, uint8_t data)
-{
-	int result;
-	struct spi_command cmds[] = {
-	{
-		.writecnt	= JEDEC_WREN_OUTSIZE,
-		.writearr	= (const unsigned char[]){ JEDEC_WREN },
-		.readcnt	= 0,
-		.readarr	= NULL,
-	}, {
-		.writecnt	= CMD_WRR_LEN,
-		.writearr	= (const unsigned char[]){
-					CMD_WRR,
-					spi_read_status_register(),
-					data,
-				},
-		.readcnt	= 0,
-		.readarr	= NULL,
-	}, {
-		.writecnt	= 0,
-		.writearr	= NULL,
-		.readcnt	= 0,
-		.readarr	= NULL,
-	}};
-
-	result = spi_send_multicommand(cmds);
-	if (result) {
-		msg_cerr("%s failed during command execution\n", __func__);
-		return -1;
-	}
-
-	programmer_delay(T_W);
-	return s25f_poll_status(flash);
-}
-
-static int s25fs_restore_cr3nv(struct flashchip *flash, uint8_t cfg)
+static int s25fs_restore_cr3nv(struct flashctx *flash, void *data)
 {
 	int ret = 0;
+
+	uint8_t cfg = *(uint8_t *)data;
+	free(data);
 
 	msg_cdbg("Restoring CR3NV value to 0x%02x\n", cfg);
 	ret |= s25fs_write_cr(flash, CR3NV_ADDR, cfg);
@@ -307,89 +244,19 @@ static int s25fs_restore_cr3nv(struct flashchip *flash, uint8_t cfg)
 	return ret;
 }
 
-/* returns state of top/bottom block protection, or <0 to indicate error */
-static int s25f_get_tbprot_o(const struct flashchip *flash)
+int s25fs_block_erase_d8(struct flashctx *flash, unsigned int addr, unsigned int blocklen)
 {
-	int cr1 = s25f_read_cr1(flash);
-
-	if (cr1 < 0)
-		return -1;
-
-	/*
-	 * 1 = BP starts at bottom (low address)
-	 * 0 = BP start at top (high address)
-	 */
-	return cr1 & CR1_TBPROT_O ? 1 : 0;
-}
-
-/* fills modifier_bits struct, returns 0 to indicate success */
-int s25f_get_modifier_bits(const struct flashchip *flash,
-					struct generic_modifier_bits *m)
-{
-	int tmp;
-
-	memset(m, 0, sizeof(*m));
-
-	tmp = s25f_get_tbprot_o(flash);
-	if (tmp < 0)
-		return -1;
-	m->tb = tmp;
-
-	return 0;
-}
-
-int s25f_set_modifier_bits(const struct flashchip *flash,
-					struct generic_modifier_bits *m)
-{
-	int cr1, cr1_orig;
-
-	cr1 = cr1_orig = s25f_read_cr1(flash);
-	if (cr1 < 0)
-		return -1;
-
-	/*
-	 * Clear BPNV so that setting BP2-0 in status register gets
-	 * written to non-volatile memory.
-	 *
-	 * For TBPROT:
-	 * 1 = BP starts at bottom (low address)
-	 * 0 = BP start at top (high address)
-	 */
-	cr1 &= ~(CR1_BPNV_O | CR1_TBPROT_O);
-	cr1 |= m->tb ? CR1_TBPROT_O : 0;
-
-	if (cr1 != cr1_orig) {
-		msg_cdbg("%s: setting cr1 bits to 0x%02x\n", __func__, cr1);
-		if (s25f_write_cr1(flash, cr1) < 0)
-			return -1;
-		if (s25f_read_cr1(flash) != cr1) {
-			msg_cerr("%s: failed to set CR1 value\n", __func__);
-			return -1;
-		}
-	} else {
-		msg_cdbg("%s: cr1 bits already match desired value: "
-				"0x%02x\n", __func__, cr1);
-	}
-
-	return 0;
-}
-
-int s25fs_block_erase_d8(struct flashchip *flash,
-		unsigned int addr, unsigned int blocklen)
-{
-	unsigned char cfg;
-	int result;
 	static int cr3nv_checked = 0;
 
 	struct spi_command erase_cmds[] = {
 	{
 		.writecnt	= JEDEC_WREN_OUTSIZE,
-		.writearr	= (const unsigned char[]){ JEDEC_WREN },
+		.writearr	= (const uint8_t[]){ JEDEC_WREN },
 		.readcnt	= 0,
 		.readarr	= NULL,
 	}, {
 		.writecnt	= JEDEC_BE_D8_OUTSIZE,
-		.writearr	= (const unsigned char[]){
+		.writearr	= (const uint8_t[]){
 					JEDEC_BE_D8,
 					(addr >> 16) & 0xff,
 					(addr >> 8) & 0xff,
@@ -407,7 +274,7 @@ int s25fs_block_erase_d8(struct flashchip *flash,
 	/* Check if hybrid sector architecture is in use and, if so,
 	 * switch to uniform sectors. */
 	if (!cr3nv_checked) {
-		cfg = s25fs_read_cr(flash, CR3NV_ADDR);
+		uint8_t cfg = s25fs_read_cr(flash, CR3NV_ADDR);
 		if (!(cfg & CR3NV_20H_NV)) {
 			s25fs_write_cr(flash, CR3NV_ADDR, cfg | CR3NV_20H_NV);
 			s25fs_software_reset(flash);
@@ -422,41 +289,44 @@ int s25fs_block_erase_d8(struct flashchip *flash,
 			msg_cdbg("\n%s: CR3NV updated (0x%02x -> 0x%02x)\n",
 					__func__, cfg,
 					s25fs_read_cr(flash, CR3NV_ADDR));
+
 			/* Restore CR3V when flashrom exits */
-			register_chip_restore(s25fs_restore_cr3nv, flash, cfg);
+			uint8_t *data = calloc(sizeof(uint8_t), 1);
+			if (!data) {
+				msg_cerr("Out of memory!\n");
+				return 1;
+			}
+			*data = cfg;
+			register_chip_restore(s25fs_restore_cr3nv, flash, data);
 		}
 
 		cr3nv_checked = 1;
 	}
 
-	result = spi_send_multicommand(erase_cmds);
+	int result = spi_send_multicommand(flash, erase_cmds);
 	if (result) {
 		msg_cerr("%s failed during command execution at address 0x%x\n",
 			__func__, addr);
 		return result;
 	}
 
-	programmer_delay(S25FS_T_SE);
+	programmer_delay(flash, S25FS_T_SE);
 	return s25f_poll_status(flash);
 }
 
-int s25fl_block_erase(struct flashchip *flash,
-		      unsigned int addr, unsigned int blocklen)
+int s25fl_block_erase(struct flashctx *flash, unsigned int addr, unsigned int blocklen)
 {
-	unsigned char status;
-	int result;
-
 	struct spi_command erase_cmds[] = {
 		{
 			.writecnt	= JEDEC_WREN_OUTSIZE,
-			.writearr	= (const unsigned char[]){
+			.writearr	= (const uint8_t[]){
 				JEDEC_WREN
 			},
 			.readcnt	= 0,
 			.readarr	= NULL,
 		}, {
 			.writecnt	= JEDEC_BE_DC_OUTSIZE,
-			.writearr	= (const unsigned char[]){
+			.writearr	= (const uint8_t[]){
 				JEDEC_BE_DC,
 				(addr >> 24) & 0xff,
 				(addr >> 16) & 0xff,
@@ -471,38 +341,30 @@ int s25fl_block_erase(struct flashchip *flash,
 		}
 	};
 
-	result = spi_send_multicommand(erase_cmds);
+	int result = spi_send_multicommand(flash, erase_cmds);
 	if (result) {
 		msg_cerr("%s failed during command execution at address 0x%x\n",
 			__func__, addr);
 		return result;
 	}
 
-	programmer_delay(S25FL_T_SE);
+	programmer_delay(flash, S25FL_T_SE);
 	return s25f_poll_status(flash);
 }
 
 
-int probe_spi_big_spansion(struct flashchip *flash)
+int probe_spi_big_spansion(struct flashctx *flash)
 {
-	static const unsigned char cmd = JEDEC_RDID;
-	int ret;
-	unsigned char dev_id[6]; /* We care only about 6 first bytes */
+	uint8_t cmd = JEDEC_RDID;
+	uint8_t dev_id[6]; /* We care only about 6 first bytes */
 
-	ret = spi_send_command(sizeof(cmd), sizeof(dev_id), &cmd, dev_id);
+	if (spi_send_command(flash, sizeof(cmd), sizeof(dev_id), &cmd, dev_id))
+		return 0;
 
-	if (!ret) {
-		int i;
-
-		for (i = 0; i < sizeof(dev_id); i++)
-			msg_gdbg(" 0x%02x", dev_id[i]);
-		msg_gdbg(".\n");
-
-		if (dev_id[0] == flash->manufacture_id) {
-			union {
-				uint8_t array[4];
-				uint32_t whole;
-			} model_id;
+	msg_gdbg("Read id bytes: ");
+	for (size_t i = 0; i < sizeof(dev_id); i++)
+		msg_gdbg(" 0x%02x", dev_id[i]);
+	msg_gdbg(".\n");
 
 	/*
 	 * The structure of the RDID output is as follows:
@@ -517,7 +379,7 @@ int probe_spi_big_spansion(struct flashchip *flash)
 	 *       04h     00h       FS: 256-kB physical sectors
 	 *       04h     01h       FS: 64-kB physical sectors
 	 *       04h     00h       FL: 256-kB physical sectors
-	 *       04h     01h       FL: Mix of 64-kB and 4KB overlayed sectors
+	 *       04h     01h       FL: Mix of 64-kB and 4KB overlaid sectors
 	 *       05h     80h       FL family
 	 *       05h     81h       FS family
 	 *
@@ -527,11 +389,15 @@ int probe_spi_big_spansion(struct flashchip *flash)
 	 * 2 types * 2 possible sizes * 2 possible sector layouts
 	 *
 	 */
-			memcpy(model_id.array, dev_id + 1, 2);
-			memcpy(model_id.array + 2, dev_id + 4, 2);
-			if (be_to_cpu32(model_id.whole) == flash->model_id)
-				return 1;
-		}
-	}
+
+	uint32_t model_id =
+		(uint32_t)dev_id[1] << 24 |
+		(uint32_t)dev_id[2] << 16 |
+		(uint32_t)dev_id[4] << 8  |
+		(uint32_t)dev_id[5] << 0;
+
+	if (dev_id[0] == flash->chip->manufacture_id && model_id == flash->chip->model_id)
+		return 1;
+
 	return 0;
 }

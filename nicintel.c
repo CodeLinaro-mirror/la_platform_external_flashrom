@@ -11,10 +11,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
  */
 
 /* Datasheet: http://download.intel.com/design/network/datashts/82559_Fast_Ethernet_Multifunction_PCI_Cardbus_Controller_Datasheet.pdf */
@@ -22,15 +18,19 @@
 #include <stdlib.h>
 #include "flash.h"
 #include "programmer.h"
+#include "hwaccess_physmap.h"
+#include "platform/pci.h"
 
-uint8_t *nicintel_bar;
-uint8_t *nicintel_control_bar;
+struct nicintel_data {
+	uint8_t *nicintel_bar;
+	uint8_t *nicintel_control_bar;
+};
 
-const struct pcidev_status nics_intel[] = {
+static const struct dev_entry nics_intel[] = {
 	{PCI_VENDOR_ID_INTEL, 0x1209, NT, "Intel", "8255xER/82551IT Fast Ethernet Controller"},
 	{PCI_VENDOR_ID_INTEL, 0x1229, OK, "Intel", "82557/8/9/0/1 Ethernet Pro 100"},
 
-	{},
+	{0},
 };
 
 /* Arbitrary limit, taken from the datasheet I just had lying around.
@@ -39,58 +39,64 @@ const struct pcidev_status nics_intel[] = {
 #define NICINTEL_MEMMAP_SIZE (128 * 1024)
 #define NICINTEL_MEMMAP_MASK (NICINTEL_MEMMAP_SIZE - 1)
 
-#define NICINTEL_CONTROL_MEMMAP_SIZE	0x10 
+#define NICINTEL_CONTROL_MEMMAP_SIZE	0x10
 
 #define CSR_FCR 0x0c
 
-static const struct par_programmer par_programmer_nicintel = {
-		.chip_readb		= nicintel_chip_readb,
-		.chip_readw		= fallback_chip_readw,
-		.chip_readl		= fallback_chip_readl,
-		.chip_readn		= fallback_chip_readn,
-		.chip_writeb		= nicintel_chip_writeb,
-		.chip_writew		= fallback_chip_writew,
-		.chip_writel		= fallback_chip_writel,
-		.chip_writen		= fallback_chip_writen,
-};
-
-static int nicintel_shutdown(void *data)
+static void nicintel_chip_writeb(const struct flashctx *flash, uint8_t val,
+				 chipaddr addr)
 {
-	physunmap(nicintel_control_bar, NICINTEL_CONTROL_MEMMAP_SIZE);
-	physunmap(nicintel_bar, NICINTEL_MEMMAP_SIZE);
-	pci_cleanup(pacc);
-	release_io_perms();
+	const struct nicintel_data *data = flash->mst->par.data;
+
+	pci_mmio_writeb(val, data->nicintel_bar + (addr & NICINTEL_MEMMAP_MASK));
+}
+
+static uint8_t nicintel_chip_readb(const struct flashctx *flash,
+				   const chipaddr addr)
+{
+	const struct nicintel_data *data = flash->mst->par.data;
+
+	return pci_mmio_readb(data->nicintel_bar + (addr & NICINTEL_MEMMAP_MASK));
+}
+
+static int nicintel_shutdown(void *par_data)
+{
+	free(par_data);
 	return 0;
 }
 
-int nicintel_init(void)
+static const struct par_master par_master_nicintel = {
+	.chip_readb	= nicintel_chip_readb,
+	.chip_writeb	= nicintel_chip_writeb,
+	.shutdown	= nicintel_shutdown,
+};
+
+static int nicintel_init(const struct programmer_cfg *cfg)
 {
+	struct pci_dev *dev = NULL;
 	uintptr_t addr;
+	uint8_t *bar;
+	uint8_t *control_bar;
 
-	/* Needed only for PCI accesses on some platforms.
-	 * FIXME: Refactor that into get_mem_perms/get_io_perms/get_pci_perms?
-	 */
-	get_io_perms();
+	/* FIXME: BAR2 is not available if the device uses the CardBus function. */
+	dev = pcidev_init(cfg, nics_intel, PCI_BASE_ADDRESS_2);
+	if (!dev)
+		return 1;
 
-	/* No need to check for errors, pcidev_init() will not return in case
-	 * of errors.
-	 * FIXME: BAR2 is not available if the device uses the CardBus function.
-	 */
-	addr = pcidev_init(PCI_BASE_ADDRESS_2, nics_intel);
+	addr = pcidev_readbar(dev, PCI_BASE_ADDRESS_2);
+	if (!addr)
+		return 1;
 
-	nicintel_bar = physmap("Intel NIC flash", addr, NICINTEL_MEMMAP_SIZE);
-	if (nicintel_bar == ERROR_PTR)
-		goto error_out_unmap;
+	bar = rphysmap("Intel NIC flash", addr, NICINTEL_MEMMAP_SIZE);
+	if (bar == ERROR_PTR)
+		return 1;
 
-	/* FIXME: Using pcidev_dev _will_ cause pretty explosions in the future. */
-	addr = pcidev_validate(pcidev_dev, PCI_BASE_ADDRESS_0, nics_intel);
-	/* FIXME: This is not an aligned mapping. Use 4k? */
-	nicintel_control_bar = physmap("Intel NIC control/status reg",
-	                               addr, NICINTEL_CONTROL_MEMMAP_SIZE);
-	if (nicintel_control_bar == ERROR_PTR)
-		goto error_out;
+	addr = pcidev_readbar(dev, PCI_BASE_ADDRESS_0);
+	if (!addr)
+		return 1;
 
-	if (register_shutdown(nicintel_shutdown, NULL))
+	control_bar = rphysmap("Intel NIC control/status reg", addr, NICINTEL_CONTROL_MEMMAP_SIZE);
+	if (control_bar == ERROR_PTR)
 		return 1;
 
 	/* FIXME: This register is pretty undocumented in all publicly available
@@ -102,27 +108,23 @@ int nicintel_init(void)
 	 * what we should do with it. Write 0x0001 because we have nothing
 	 * better to do with our time.
 	 */
-	pci_rmmio_writew(0x0001, nicintel_control_bar + CSR_FCR);
+	pci_rmmio_writew(0x0001, control_bar + CSR_FCR);
+
+	struct nicintel_data *data = calloc(1, sizeof(*data));
+	if (!data) {
+		msg_perr("Unable to allocate space for PAR master data\n");
+		return 1;
+	}
+	data->nicintel_bar = bar;
+	data->nicintel_control_bar = control_bar;
 
 	max_rom_decode.parallel = NICINTEL_MEMMAP_SIZE;
-	register_par_programmer(&par_programmer_nicintel, BUS_PARALLEL);
-
-	return 0;
-
-error_out_unmap:
-	physunmap(nicintel_bar, NICINTEL_MEMMAP_SIZE);
-error_out:
-	pci_cleanup(pacc);
-	release_io_perms();
-	return 1;
+	return register_par_master(&par_master_nicintel, BUS_PARALLEL, data);
 }
 
-void nicintel_chip_writeb(uint8_t val, chipaddr addr)
-{
-	pci_mmio_writeb(val, nicintel_bar + (addr & NICINTEL_MEMMAP_MASK));
-}
-
-uint8_t nicintel_chip_readb(const chipaddr addr)
-{
-	return pci_mmio_readb(nicintel_bar + (addr & NICINTEL_MEMMAP_MASK));
-}
+const struct programmer_entry programmer_nicintel = {
+	.name			= "nicintel",
+	.type			= PCI,
+	.devs.dev		= nics_intel,
+	.init			= nicintel_init,
+};

@@ -14,10 +14,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
  */
 
 #include "flash.h"
@@ -30,55 +26,56 @@
 #define RESET			0xFF
 #define READ_ID			0x90
 
-int protect_28sf040(struct flashchip *flash)
+int protect_28sf040(struct flashctx *flash)
 {
 	chipaddr bios = flash->virtual_memory;
 
-	chip_readb(bios + 0x1823);
-	chip_readb(bios + 0x1820);
-	chip_readb(bios + 0x1822);
-	chip_readb(bios + 0x0418);
-	chip_readb(bios + 0x041B);
-	chip_readb(bios + 0x0419);
-	chip_readb(bios + 0x040A);
+	chip_readb(flash, bios + 0x1823);
+	chip_readb(flash, bios + 0x1820);
+	chip_readb(flash, bios + 0x1822);
+	chip_readb(flash, bios + 0x0418);
+	chip_readb(flash, bios + 0x041B);
+	chip_readb(flash, bios + 0x0419);
+	chip_readb(flash, bios + 0x040A);
 
 	return 0;
 }
 
-int unprotect_28sf040(struct flashchip *flash)
+int unprotect_28sf040(struct flashctx *flash)
 {
 	chipaddr bios = flash->virtual_memory;
 
-	chip_readb(bios + 0x1823);
-	chip_readb(bios + 0x1820);
-	chip_readb(bios + 0x1822);
-	chip_readb(bios + 0x0418);
-	chip_readb(bios + 0x041B);
-	chip_readb(bios + 0x0419);
-	chip_readb(bios + 0x041A);
+	chip_readb(flash, bios + 0x1823);
+	chip_readb(flash, bios + 0x1820);
+	chip_readb(flash, bios + 0x1822);
+	chip_readb(flash, bios + 0x0418);
+	chip_readb(flash, bios + 0x041B);
+	chip_readb(flash, bios + 0x0419);
+	chip_readb(flash, bios + 0x041A);
 
 	return 0;
 }
 
-int erase_sector_28sf040(struct flashchip *flash, unsigned int address, unsigned int sector_size)
+int erase_sector_28sf040(struct flashctx *flash, unsigned int address,
+			 unsigned int sector_size)
 {
 	chipaddr bios = flash->virtual_memory;
 
 	/* This command sequence is very similar to erase_block_82802ab. */
-	chip_writeb(AUTO_PG_ERASE1, bios);
-	chip_writeb(AUTO_PG_ERASE2, bios + address);
+	chip_writeb(flash, AUTO_PG_ERASE1, bios);
+	chip_writeb(flash, AUTO_PG_ERASE2, bios + address);
 
 	/* wait for Toggle bit ready */
-	toggle_ready_jedec(bios);
+	toggle_ready_jedec(flash, bios);
 
 	/* FIXME: Check the status register for errors. */
 	return 0;
 }
 
 /* chunksize is 1 */
-int write_28sf040(struct flashchip *flash, uint8_t *src, unsigned int start, unsigned int len)
+int write_28sf040(struct flashctx *flash, const uint8_t *src, unsigned int start, unsigned int len)
 {
-	int i;
+	unsigned int i;
 	chipaddr bios = flash->virtual_memory;
 	chipaddr dst = flash->virtual_memory + start;
 
@@ -90,33 +87,35 @@ int write_28sf040(struct flashchip *flash, uint8_t *src, unsigned int start, uns
 			continue;
 		}
 		/*issue AUTO PROGRAM command */
-		chip_writeb(AUTO_PGRM, dst);
-		chip_writeb(*src++, dst++);
+		chip_writeb(flash, AUTO_PGRM, dst);
+		chip_writeb(flash, *src++, dst++);
 
 		/* wait for Toggle bit ready */
-		toggle_ready_jedec(bios);
+		toggle_ready_jedec(flash, bios);
+		update_progress(flash, FLASHROM_PROGRESS_WRITE, i + 1, len);
 	}
 
 	return 0;
 }
 
-static int erase_28sf040(struct flashchip *flash)
+static int erase_28sf040(struct flashctx *flash)
 {
 	chipaddr bios = flash->virtual_memory;
 
-	chip_writeb(CHIP_ERASE, bios);
-	chip_writeb(CHIP_ERASE, bios);
+	chip_writeb(flash, CHIP_ERASE, bios);
+	chip_writeb(flash, CHIP_ERASE, bios);
 
-	programmer_delay(10);
-	toggle_ready_jedec(bios);
+	programmer_delay(flash, 10);
+	toggle_ready_jedec(flash, bios);
 
 	/* FIXME: Check the status register for errors. */
 	return 0;
 }
 
-int erase_chip_28sf040(struct flashchip *flash, unsigned int addr, unsigned int blocklen)
+int erase_chip_28sf040(struct flashctx *flash, unsigned int addr,
+		       unsigned int blocklen)
 {
-	if ((addr != 0) || (blocklen != flash->total_size * 1024)) {
+	if ((addr != 0) || (blocklen != flash->chip->total_size * 1024)) {
 		msg_cerr("%s called with incorrect arguments\n",
 			__func__);
 		return -1;

@@ -11,10 +11,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
  */
 
 #include <stdio.h>
@@ -25,143 +21,163 @@
 #include "programmer.h"
 #include "spi.h"
 
-/* Length of half a clock period in usecs. */
-static int bitbang_spi_half_period;
-
-static const struct bitbang_spi_master *bitbang_spi_master = NULL;
-
 /* Note that CS# is active low, so val=0 means the chip is active. */
-static void bitbang_spi_set_cs(int val)
+static void bitbang_spi_set_cs(const struct bitbang_spi_master * const master, int val, void *spi_data)
 {
-	bitbang_spi_master->set_cs(val);
+	master->set_cs(val, spi_data);
 }
 
-static void bitbang_spi_set_sck(int val)
+static void bitbang_spi_set_sck(const struct bitbang_spi_master * const master, int val, void *spi_data)
 {
-	bitbang_spi_master->set_sck(val);
+	master->set_sck(val, spi_data);
 }
 
-static void bitbang_spi_set_mosi(int val)
+static void bitbang_spi_request_bus(const struct bitbang_spi_master * const master, void *spi_data)
 {
-	bitbang_spi_master->set_mosi(val);
+	if (master->request_bus)
+		master->request_bus(spi_data);
 }
 
-static int bitbang_spi_get_miso(void)
+static void bitbang_spi_release_bus(const struct bitbang_spi_master * const master, void *spi_data)
 {
-	return bitbang_spi_master->get_miso();
+	if (master->release_bus)
+		master->release_bus(spi_data);
 }
 
-static void bitbang_spi_request_bus(void)
+static void bitbang_spi_set_sck_set_mosi(const struct bitbang_spi_master * const master, int sck, int mosi,
+					void *spi_data)
 {
-	if (bitbang_spi_master->request_bus)
-		bitbang_spi_master->request_bus();
-}
-
-static void bitbang_spi_release_bus(void)
-{
-	if (bitbang_spi_master->release_bus)
-		bitbang_spi_master->release_bus();
-}
-
-static int bitbang_spi_send_command(unsigned int writecnt, unsigned int readcnt,
-		const unsigned char *writearr, unsigned char *readarr);
-
-static const struct spi_programmer spi_programmer_bitbang = {
-	.type		= SPI_CONTROLLER_BITBANG,
-	.max_data_read	= MAX_DATA_READ_UNLIMITED,
-	.max_data_write	= MAX_DATA_WRITE_UNLIMITED,
-	.command	= bitbang_spi_send_command,
-	.multicommand	= default_spi_send_multicommand,
-	.read		= default_spi_read,
-	.write_256	= default_spi_write_256,
-};
-
-int bitbang_spi_init(const struct bitbang_spi_master *master, int halfperiod)
-{
-	/* BITBANG_SPI_INVALID is 0, so if someone forgot to initialize ->type,
-	 * we catch it here. Same goes for missing initialization of bitbanging
-	 * functions.
-	 */
-	if (!master || master->type == BITBANG_SPI_INVALID || !master->set_cs ||
-	    !master->set_sck || !master->set_mosi || !master->get_miso) {
-		msg_perr("Incomplete SPI bitbang master setting!\n"
-			 "Please report a bug at flashrom@flashrom.org\n");
-		return 1;
-	}
-	if (bitbang_spi_master) {
-		msg_perr("SPI bitbang master already initialized!\n"
-			 "Please report a bug at flashrom@flashrom.org\n");
-		return 1;
+	if (master->set_sck_set_mosi) {
+		master->set_sck_set_mosi(sck, mosi, spi_data);
+		return;
 	}
 
-	bitbang_spi_master = master;
-	bitbang_spi_half_period = halfperiod;
-
-	register_spi_programmer(&spi_programmer_bitbang);
-
-	/* FIXME: Run bitbang_spi_request_bus here or in programmer init? */
-	bitbang_spi_set_cs(1);
-	bitbang_spi_set_sck(0);
-	bitbang_spi_set_mosi(0);
-	return 0;
+	master->set_sck(sck, spi_data);
+	master->set_mosi(mosi, spi_data);
 }
 
-int bitbang_spi_shutdown(const struct bitbang_spi_master *master)
+static int bitbang_spi_set_sck_get_miso(const struct bitbang_spi_master * const master, int sck,
+					void *spi_data)
 {
-	if (!bitbang_spi_master) {
-		msg_perr("Shutting down an uninitialized SPI bitbang master!\n"
-			 "Please report a bug at flashrom@flashrom.org\n");
-		return 1;
-	}
-	if (master != bitbang_spi_master) {
-		msg_perr("Shutting down a mismatched SPI bitbang master!\n"
-			 "Please report a bug at flashrom@flashrom.org\n");
-		return 1;
-	}
+	if (master->set_sck_get_miso)
+		return master->set_sck_get_miso(sck, spi_data);
 
-	/* FIXME: Run bitbang_spi_release_bus here or per command? */
-	bitbang_spi_master = NULL;
-	return 0;
+	master->set_sck(sck, spi_data);
+	return master->get_miso(spi_data);
 }
 
-static uint8_t bitbang_spi_readwrite_byte(uint8_t val)
+static uint8_t bitbang_spi_read_byte(const struct bitbang_spi_master *master, void *spi_data)
 {
 	uint8_t ret = 0;
 	int i;
 
 	for (i = 7; i >= 0; i--) {
-		bitbang_spi_set_mosi((val >> i) & 1);
-		programmer_delay(bitbang_spi_half_period);
-		bitbang_spi_set_sck(1);
+		if (i == 0)
+			bitbang_spi_set_sck_set_mosi(master, 0, 0, spi_data);
+		else
+			bitbang_spi_set_sck(master, 0, spi_data);
+		default_delay(master->half_period);
 		ret <<= 1;
-		ret |= bitbang_spi_get_miso();
-		programmer_delay(bitbang_spi_half_period);
-		bitbang_spi_set_sck(0);
+		ret |= bitbang_spi_set_sck_get_miso(master, 1, spi_data);
+		default_delay(master->half_period);
 	}
 	return ret;
 }
 
-static int bitbang_spi_send_command(unsigned int writecnt, unsigned int readcnt,
-		const unsigned char *writearr, unsigned char *readarr)
+static void bitbang_spi_write_byte(const struct bitbang_spi_master *master, uint8_t val, void *spi_data)
 {
 	int i;
+
+	for (i = 7; i >= 0; i--) {
+		bitbang_spi_set_sck_set_mosi(master, 0, (val >> i) & 1, spi_data);
+		default_delay(master->half_period);
+		bitbang_spi_set_sck(master, 1, spi_data);
+		default_delay(master->half_period);
+	}
+}
+
+struct bitbang_spi_master_data {
+	const struct bitbang_spi_master *master;
+	void *spi_data;
+};
+
+static int bitbang_spi_send_command(const struct flashctx *flash,
+				    unsigned int writecnt, unsigned int readcnt,
+				    const unsigned char *writearr,
+				    unsigned char *readarr)
+{
+	unsigned int i;
+	const struct bitbang_spi_master_data *data = flash->mst->spi.data;
+	const struct bitbang_spi_master *master = data->master;
 
 	/* FIXME: Run bitbang_spi_request_bus here or in programmer init?
 	 * Requesting and releasing the SPI bus is handled in here to allow the
 	 * programmer to use its own SPI engine for native accesses.
 	 */
-	bitbang_spi_request_bus();
-	bitbang_spi_set_cs(0);
+	bitbang_spi_request_bus(master, data->spi_data);
+	bitbang_spi_set_cs(master, 0, data->spi_data);
 	for (i = 0; i < writecnt; i++)
-		bitbang_spi_readwrite_byte(writearr[i]);
+		bitbang_spi_write_byte(master, writearr[i], data->spi_data);
 	for (i = 0; i < readcnt; i++)
-		readarr[i] = bitbang_spi_readwrite_byte(0);
+		readarr[i] = bitbang_spi_read_byte(master, data->spi_data);
 
-	programmer_delay(bitbang_spi_half_period);
-	bitbang_spi_set_cs(1);
-	programmer_delay(bitbang_spi_half_period);
+	bitbang_spi_set_sck(master, 0, data->spi_data);
+	default_delay(master->half_period);
+	bitbang_spi_set_cs(master, 1, data->spi_data);
+	default_delay(master->half_period);
 	/* FIXME: Run bitbang_spi_release_bus here or in programmer init? */
-	bitbang_spi_release_bus();
+	bitbang_spi_release_bus(master, data->spi_data);
 
+	return 0;
+}
+
+static int bitbang_spi_shutdown(void *data)
+{
+	/* FIXME: Run bitbang_spi_release_bus here or per command? */
+	free(data);
+	return 0;
+}
+
+static const struct spi_master spi_master_bitbang = {
+	.features	= SPI_MASTER_4BA,
+	.max_data_read	= MAX_DATA_READ_UNLIMITED,
+	.max_data_write	= MAX_DATA_WRITE_UNLIMITED,
+	.command	= bitbang_spi_send_command,
+	.read		= default_spi_read,
+	.write_256	= default_spi_write_256,
+	.shutdown	= bitbang_spi_shutdown,
+};
+
+int register_spi_bitbang_master(const struct bitbang_spi_master *master, void *spi_data)
+{
+	struct spi_master mst = spi_master_bitbang;
+	/* If someone forgot to initialize a bitbang function, we catch it here. */
+	if (!master || !master->set_cs ||
+	    !master->set_sck || !master->set_mosi || !master->get_miso ||
+	    (master->request_bus && !master->release_bus) ||
+	    (!master->request_bus && master->release_bus)) {
+		msg_perr("Incomplete SPI bitbang master setting!\n"
+			 "Please report a bug at flashrom@flashrom.org\n");
+		return ERROR_FLASHROM_BUG;
+	}
+
+	struct bitbang_spi_master_data *data = calloc(1, sizeof(*data));
+	if (!data)
+		return ERROR_FLASHROM_FATAL;
+
+	data->master = master;
+	if (spi_data)
+		data->spi_data = spi_data;
+
+	register_spi_master(&mst, data);
+
+	/* Only mess with the bus if we're sure nobody else uses it. */
+	bitbang_spi_request_bus(master, spi_data);
+	bitbang_spi_set_cs(master, 1, spi_data);
+	bitbang_spi_set_sck_set_mosi(master, 0, 0, spi_data);
+	/* FIXME: Release SPI bus here and request it again for each command or
+	 * don't release it now and only release it on programmer shutdown?
+	 */
+	bitbang_spi_release_bus(master, spi_data);
 	return 0;
 }
