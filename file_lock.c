@@ -93,7 +93,11 @@ static int file_lock_open_or_create(struct ipc_lock *lock)
 {
 	char path[PATH_MAX];
 	const char *dir = SYSTEM_LOCKFILE_DIR;
+#ifdef __ANDROID__
+	const char fallback[] = "/data/local/tmp";
+#else
 	const char fallback[] = "/tmp";
+#endif
 
 	if (test_dir(dir)) {
 		dir = fallback;
@@ -105,11 +109,16 @@ static int file_lock_open_or_create(struct ipc_lock *lock)
 	if (snprintf(path, sizeof(path), "%s/%s", dir, lock->filename) < 0)
 		return -1;
 
-	lock->fd = open(path, O_RDWR | O_CREAT, 0600);
+	/* 0666: User/Group/Others: read, write. */
+	mode_t permissions = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH;
+	lock->fd = open(path, O_RDWR | O_CREAT, permissions);
 	if (lock->fd < 0) {
 		msg_gerr("Cannot open lockfile %s\n", path);
 		return -1;
 	}
+	/* Ignore potential fchmod() failures since we might not be the owner. */
+	if (fchmod(lock->fd, permissions) == -1)
+		msg_gdbg("Cannot change the permissions of lockfile %s\n", path);
 
 	msg_gdbg("Opened file lock \"%s\"\n", path);
 	return 0;
