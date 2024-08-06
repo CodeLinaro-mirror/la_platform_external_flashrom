@@ -1,199 +1,260 @@
 /*
- * 82802ab.c: driver for programming JEDEC standard flash parts
+ * This file is part of the flashrom project.
  *
+ * Copyright (C) 2000 Silicon Integrated System Corporation
  *
- * Copyright 2000 Silicon Integrated System Corporation
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- *	This program is free software; you can redistribute it and/or modify
- *	it under the terms of the GNU General Public License as published by
- *	the Free Software Foundation; either version 2 of the License, or
- *	(at your option) any later version.
- *
- *	This program is distributed in the hope that it will be useful,
- *	but WITHOUT ANY WARRANTY; without even the implied warranty of
- *	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *	GNU General Public License for more details.
- *
- *	You should have received a copy of the GNU General Public License
- *	along with this program; if not, write to the Free Software
- *	Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
- *
- *
- * Reference: http://www.intel.com/design/chipsets/datashts/290658.htm
- *
- * $Id$
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
-#include <errno.h>
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/io.h>
-#include <unistd.h>
-#include <stdio.h>
-#include <stdlib.h>
+/*
+ * Datasheet:
+ *  - Name: Intel 82802AB/82802AC Firmware Hub (FWH)
+ *  - URL: http://www.intel.com/design/chipsets/datashts/290658.htm
+ *  - PDF: http://download.intel.com/design/chipsets/datashts/29065804.pdf
+ *  - Order number: 290658-004
+ */
 
+#include <stdbool.h>
 #include "flash.h"
-#include "82802ab.h"
+#include "chipdrivers.h"
 
-// I need that Berkeley bit-map printer
-void print_82802ab_status(unsigned char status)
+void print_status_82802ab(uint8_t status)
 {
-	printf("%s", status & 0x80 ? "Ready:" : "Busy:");
-	printf("%s", status & 0x40 ? "BE SUSPEND:" : "BE RUN/FINISH:");
-	printf("%s", status & 0x20 ? "BE ERROR:" : "BE OK:");
-	printf("%s", status & 0x10 ? "PROG ERR:" : "PROG OK:");
-	printf("%s", status & 0x8 ? "VP ERR:" : "VPP OK:");
-	printf("%s", status & 0x4 ? "PROG SUSPEND:" : "PROG RUN/FINISH:");
-	printf("%s", status & 0x2 ? "WP|TBL#|WP#,ABORT:" : "UNLOCK:");
+	msg_cdbg("%s", status & 0x80 ? "Ready:" : "Busy:");
+	msg_cdbg("%s", status & 0x40 ? "BE SUSPEND:" : "BE RUN/FINISH:");
+	msg_cdbg("%s", status & 0x20 ? "BE ERROR:" : "BE OK:");
+	msg_cdbg("%s", status & 0x10 ? "PROG ERR:" : "PROG OK:");
+	msg_cdbg("%s", status & 0x8 ? "VP ERR:" : "VPP OK:");
+	msg_cdbg("%s", status & 0x4 ? "PROG SUSPEND:" : "PROG RUN/FINISH:");
+	msg_cdbg("%s", status & 0x2 ? "WP|TBL#|WP#,ABORT:" : "UNLOCK:");
 }
 
-int probe_82802ab (struct flashchip * flash)
+int probe_82802ab(struct flashctx *flash)
 {
-	volatile unsigned char * bios = flash->virt_addr;
-	unsigned char  id1, id2;
+	chipaddr bios = flash->virtual_memory;
+	uint8_t id1, id2, flashcontent1, flashcontent2;
+	int shifted = (flash->chip->feature_bits & FEATURE_ADDR_SHIFTED) ? 1 : 0;
 
-#if 0
-	*(volatile unsigned char *) (bios + 0x5555) = 0xAA;
-	*(volatile unsigned char *) (bios + 0x2AAA) = 0x55;
-	*(volatile unsigned char *) (bios + 0x5555) = 0x90;
-#endif
+	/* Reset to get a clean state */
+	chip_writeb(flash, 0xFF, bios);
+	programmer_delay(flash, 10);
 
-	*bios = 0xff;
-	myusec_delay(10);
-	*bios = 0x90;
-	myusec_delay(10);
+	/* Enter ID mode */
+	chip_writeb(flash, 0x90, bios);
+	programmer_delay(flash, 10);
 
-	id1 = *(volatile unsigned char *) bios;
-	id2 = *(volatile unsigned char *) (bios + 0x01);
+	id1 = chip_readb(flash, bios + (0x00 << shifted));
+	id2 = chip_readb(flash, bios + (0x01 << shifted));
 
-#if 1
-	*(volatile unsigned char *) (bios + 0x5555) = 0xAA;
-	*(volatile unsigned char *) (bios + 0x2AAA) = 0x55;
-	*(volatile unsigned char *) (bios + 0x5555) = 0xF0;
+	/* Leave ID mode */
+	chip_writeb(flash, 0xFF, bios);
 
-#endif
-	myusec_delay(10);
+	programmer_delay(flash, 10);
 
-	printf("%s: id1 0x%x, id2 0x%x\n", __FUNCTION__, id1, id2);	
+	msg_cdbg("%s: id1 0x%02x, id2 0x%02x", __func__, id1, id2);
 
-	if (id1 == flash->manufacture_id && id2 == flash->model_id) {
-		size_t size = flash->total_size * 1024;
-		// we need to mmap the write-protect space. 
-        	bios = mmap (0, size, PROT_WRITE | PROT_READ, MAP_SHARED,
-                     flash->fd_mem, (off_t) (0 - 0x400000 - size));
-        	if (bios == MAP_FAILED) {
-			// it's this part but we can't map it ...
-            		perror("Error MMAP /dev/mem");
-            		exit(1);
-        	}
+	if (!oddparity(id1))
+		msg_cdbg(", id1 parity violation");
 
-		flash->virt_addr_2 = bios;
-		return 1;
+	/*
+	 * Read the product ID location again. We should now see normal
+	 * flash contents.
+	 */
+	flashcontent1 = chip_readb(flash, bios + (0x00 << shifted));
+	flashcontent2 = chip_readb(flash, bios + (0x01 << shifted));
+
+	if (id1 == flashcontent1)
+		msg_cdbg(", id1 is normal flash content");
+	if (id2 == flashcontent2)
+		msg_cdbg(", id2 is normal flash content");
+
+	msg_cdbg("\n");
+	if (id1 != flash->chip->manufacture_id || id2 != flash->chip->model_id)
+		return 0;
+
+	return 1;
+}
+
+/* FIXME: needs timeout */
+uint8_t wait_82802ab(struct flashctx *flash)
+{
+	uint8_t status;
+	chipaddr bios = flash->virtual_memory;
+
+	chip_writeb(flash, 0x70, bios);
+
+	while ((chip_readb(flash, bios) & 0x80) == 0)	// it's busy
+		;
+
+	status = chip_readb(flash, bios);
+
+	/* Reset to get a clean state */
+	chip_writeb(flash, 0xFF, bios);
+
+	return status;
+}
+
+int erase_block_82802ab(struct flashctx *flash, unsigned int page,
+			unsigned int pagesize)
+{
+	chipaddr bios = flash->virtual_memory;
+	uint8_t status;
+
+	// clear status register
+	chip_writeb(flash, 0x50, bios + page);
+
+	// now start it
+	chip_writeb(flash, 0x20, bios + page);
+	chip_writeb(flash, 0xd0, bios + page);
+	programmer_delay(flash, 10);
+
+	// now let's see what the register is
+	status = wait_82802ab(flash);
+	print_status_82802ab(status);
+
+	/* FIXME: Check the status register for errors. */
+	return 0;
+}
+
+/* chunksize is 1 */
+int write_82802ab(struct flashctx *flash, const uint8_t *src, unsigned int start, unsigned int len)
+{
+	unsigned int i;
+	chipaddr dst = flash->virtual_memory + start;
+
+	for (i = 0; i < len; i++) {
+		/* transfer data from source to destination */
+		chip_writeb(flash, 0x40, dst);
+		chip_writeb(flash, *src++, dst++);
+		wait_82802ab(flash);
+		update_progress(flash, FLASHROM_PROGRESS_WRITE, i + 1, len);
+	}
+
+	/* FIXME: Ignore errors for now. */
+	return 0;
+}
+
+static int unlock_28f004s5(struct flashctx *flash)
+{
+	chipaddr bios = flash->virtual_memory;
+	uint8_t mcfg, bcfg;
+	bool need_unlock = false, can_unlock = false;
+	unsigned int i;
+
+	/* Clear status register */
+	chip_writeb(flash, 0x50, bios);
+
+	/* Read identifier codes */
+	chip_writeb(flash, 0x90, bios);
+
+	/* Read master lock-bit */
+	mcfg = chip_readb(flash, bios + 0x3);
+	msg_cdbg("master lock is ");
+	if (mcfg) {
+		msg_cdbg("locked!\n");
+	} else {
+		msg_cdbg("unlocked!\n");
+		can_unlock = true;
+	}
+
+	/* Read block lock-bits */
+	for (i = 0; i < flash->chip->total_size * 1024; i+= (64 * 1024)) {
+		bcfg = chip_readb(flash, bios + i + 2); // read block lock config
+		msg_cdbg("block lock at %06x is %slocked!\n", i, bcfg ? "" : "un");
+		if (bcfg) {
+			need_unlock = true;
+		}
+	}
+
+	/* Reset chip */
+	chip_writeb(flash, 0xFF, bios);
+
+	/* Unlock: clear block lock-bits, if needed */
+	if (can_unlock && need_unlock) {
+		msg_cdbg("Unlock: ");
+		chip_writeb(flash, 0x60, bios);
+		chip_writeb(flash, 0xD0, bios);
+		chip_writeb(flash, 0xFF, bios);
+		msg_cdbg("Done!\n");
+	}
+
+	/* Error: master locked or a block is locked */
+	if (!can_unlock && need_unlock) {
+		msg_cerr("At least one block is locked and lockdown is active!\n");
+		return -1;
 	}
 
 	return 0;
 }
 
-unsigned char wait_82802ab(volatile unsigned char * bios)
+static int unlock_lh28f008bjt(struct flashctx *flash)
 {
+	chipaddr bios = flash->virtual_memory;
+	uint8_t mcfg, bcfg;
+	bool need_unlock = false, can_unlock = false;
+	unsigned int i;
 
-	unsigned char status;
-	unsigned char id1, id2;
+	/* Wait if chip is busy */
+	wait_82802ab(flash);
 
-	*bios = 0x70;
-	if ((*bios & 0x80) == 0) { // it's busy
-		while ((*bios & 0x80) == 0)
-			;
+	/* Read identifier codes */
+	chip_writeb(flash, 0x90, bios);
+
+	/* Read master lock-bit */
+	mcfg = chip_readb(flash, bios + 0x3);
+	msg_cdbg("master lock is ");
+	if (mcfg) {
+		msg_cdbg("locked!\n");
+	} else {
+		msg_cdbg("unlocked!\n");
+		can_unlock = true;
 	}
 
-	status = *bios;
+	/* Read block lock-bits, 8 * 8 KB + 15 * 64 KB */
+	for (i = 0; i < flash->chip->total_size * 1024;
+	     i += (i >= (64 * 1024) ? 64 * 1024 : 8 * 1024)) {
+		bcfg = chip_readb(flash, bios + i + 2); /* read block lock config */
+		msg_cdbg("block lock at %06x is %slocked!\n", i,
+			 bcfg ? "" : "un");
+		if (bcfg)
+			need_unlock = true;
+	}
 
-	// put another command to get out of status register mode
-	
-	*bios = 0x90;
-	myusec_delay(10);
+	/* Reset chip */
+	chip_writeb(flash, 0xFF, bios);
 
-	id1 = *(volatile unsigned char *) bios;
-	id2 = *(volatile unsigned char *) (bios + 0x01);
-		
-	// this is needed to jam it out of "read id" mode
-	*(volatile unsigned char *) (bios + 0x5555) = 0xAA;
-	*(volatile unsigned char *) (bios + 0x2AAA) = 0x55;
-	*(volatile unsigned char *) (bios + 0x5555) = 0xF0;
-	return status;
-  
-}
-int erase_82802ab_block(struct flashchip *flash, int offset)
-{
-	volatile unsigned char * bios = flash->virt_addr + offset;
-	volatile unsigned char *wrprotect = flash->virt_addr_2 + offset + 2;
-	unsigned char status;
+	/* Unlock: clear block lock-bits, if needed */
+	if (can_unlock && need_unlock) {
+		msg_cdbg("Unlock: ");
+		chip_writeb(flash, 0x60, bios);
+		chip_writeb(flash, 0xD0, bios);
+		chip_writeb(flash, 0xFF, bios);
+		wait_82802ab(flash);
+		msg_cdbg("Done!\n");
+	}
 
-	// clear status register
-	*bios = 0x50;
-	//printf("Erase at %p\n", bios);
-	// clear write protect
-	//printf("write protect is at %p\n", (wrprotect));
-	//printf("write protect is 0x%x\n", *(wrprotect));
-	*(wrprotect) = 0;
-	//printf("write protect is 0x%x\n", *(wrprotect));
-
-	// now start it
-	*(volatile unsigned char *) (bios) = 0x20;
-	*(volatile unsigned char *) (bios) = 0xd0;
-	myusec_delay(10);
-	// now let's see what the register is
-	status = wait_82802ab(flash->virt_addr);
-	//print_82802ab_status(status);
-	printf("DONE BLOCK 0x%x\n", offset);
-	return(0);
-}
-int erase_82802ab (struct flashchip * flash)
-{
-	int i;
-	unsigned int total_size = flash->total_size * 1024;
-
-	printf("total_size is %d; flash->page_size is %d\n", 
-			 total_size, flash->page_size);
-	for(i = 0; i < total_size; i += flash->page_size)
-		erase_82802ab_block(flash, i);
-	printf("DONE ERASE\n");
-	return(0);
-}
-
-void write_page_82802ab (volatile char * bios, char * src, volatile char * dst,
-                                         int page_size)
-{
-        int i;
-
-        for (i = 0; i < page_size; i++) {
-                /* transfer data from source to destination */
-                *dst = 0x40;
-                *dst++ = *src++;
-		wait_82802ab(bios);
-        }
-
-}
-
-int write_82802ab (struct flashchip * flash, unsigned char * buf)
-{
-	int i;
-	int total_size = flash->total_size *1024, page_size = flash->page_size;
-	volatile unsigned char * bios = flash->virt_addr;
-
-	erase_82802ab (flash);
-	if (*bios != 0xff) {
-		printf("ERASE FAILED\n");
+	/* Error: master locked or a block is locked */
+	if (!can_unlock && need_unlock) {
+		msg_cerr("At least one block is locked and lockdown is active!\n");
 		return -1;
 	}
-	printf ("Programming Page: ");
-	for (i = 0; i < total_size/page_size; i++) {
-		printf ("%04d at address: 0x%08x", i, i * page_size);
-		write_page_82802ab(bios, buf + i * page_size, bios + i * page_size,
-				 page_size);
-		printf ("\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b");
-	}
-	printf("\n");
-	protect_82802ab (bios);
-	return(0);
+
+	return 0;
+}
+
+blockprotect_func_t *lookup_82802ab_blockprotect_func_ptr(const struct flashchip *const chip)
+{
+	switch (chip->unlock) {
+		case UNLOCK_28F004S5: return unlock_28f004s5;
+		case UNLOCK_LH28F008BJT: return unlock_lh28f008bjt;
+		default: return NULL; /* fallthough */
+	};
 }
