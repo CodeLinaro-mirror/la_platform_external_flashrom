@@ -1,0 +1,24 @@
+name: "flashrom"
+description:
+    "flashrom is a utility for detecting, reading, writing, verifying and "
+    "erasing flash chips. It is often used to flash BIOS/EFI/coreboot/firmware "
+    "images in-system using a supported mainboard, but it also supports "
+    "flashing of network cards (NICs), SATA controller cards, and other "
+    "external devices which can program flash chips. "
+    " "
+    "It supports a wide range of flash chips (most commonly found in SOIC8, "
+    "DIP8, SOIC16, WSON8, PLCC32,  IP32, TSOP32, and TSOP40 packages), which "
+    "use various protocols such as LPC, FWH, parallel flash, or SPI."
+
+third_party {
+  homepage: "https://flashrom.org/"
+  identifier {
+    type: "Git"
+    value: "https://chromium.googlesource.com/chromiumos/third_party/flashrom/"
+    primary_source: true
+    version: "main-cros"
+  }
+  license_type: RESTRICTED
+  version: "main-cros"
+  last_upgrade_date { year: 2024 month: 6 day: 14 }
+}
