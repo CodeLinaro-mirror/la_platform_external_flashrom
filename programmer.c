@@ -1,7 +1,7 @@
 /*
  * This file is part of the flashrom project.
  *
- * Copyright (C) 2009,2010 Carl-Daniel Hailfinger
+ * Copyright (C) 2009,2010,2011 Carl-Daniel Hailfinger
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -12,114 +12,37 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
  */
 
 #include "flash.h"
 #include "programmer.h"
 
-static const struct par_programmer par_programmer_none = {
-		.chip_readb		= noop_chip_readb,
-		.chip_readw		= fallback_chip_readw,
-		.chip_readl		= fallback_chip_readl,
-		.chip_readn		= fallback_chip_readn,
-		.chip_writeb		= noop_chip_writeb,
-		.chip_writew		= fallback_chip_writew,
-		.chip_writel		= fallback_chip_writel,
-		.chip_writen		= fallback_chip_writen,
-};
+/* The limit of 4 is totally arbitrary. */
+#define MASTERS_MAX 4
+struct registered_master registered_masters[MASTERS_MAX];
+int registered_master_count = 0;
 
-const struct par_programmer *par_programmer = &par_programmer_none;
-
-/* No-op shutdown() for programmers which don't need special handling */
-int noop_shutdown(void)
+/* This function copies the struct registered_master parameter. */
+int register_master(const struct registered_master *mst)
 {
+	if (registered_master_count >= MASTERS_MAX) {
+		msg_perr("Tried to register more than %i master "
+			 "interfaces.\n", MASTERS_MAX);
+		return ERROR_FLASHROM_LIMIT;
+	}
+	registered_masters[registered_master_count] = *mst;
+	registered_master_count++;
+
 	return 0;
 }
 
-/* Fallback map() for programmers which don't need special handling */
-void *fallback_map(const char *descr, unsigned long phys_addr, size_t len)
+enum chipbustype get_buses_supported(void)
 {
-	/* FIXME: Should return phys_addr. */
-	return NULL;
-}
+	int i;
+	enum chipbustype ret = BUS_NONE;
 
-/* No-op/fallback unmap() for programmers which don't need special handling */
-void fallback_unmap(void *virt_addr, size_t len)
-{
-}
+	for (i = 0; i < registered_master_count; i++)
+		ret |= registered_masters[i].buses_supported;
 
-/* No-op chip_writeb() for drivers not supporting addr/data pair accesses */
-uint8_t noop_chip_readb(const chipaddr addr)
-{
-	return 0xff;
+	return ret;
 }
-
-/* No-op chip_writeb() for drivers not supporting addr/data pair accesses */
-void noop_chip_writeb(uint8_t val, chipaddr addr)
-{
-}
-
-/* Little-endian fallback for drivers not supporting 16 bit accesses */
-void fallback_chip_writew(uint16_t val, chipaddr addr)
-{
-	chip_writeb(val & 0xff, addr);
-	chip_writeb((val >> 8) & 0xff, addr + 1);
-}
-
-/* Little-endian fallback for drivers not supporting 16 bit accesses */
-uint16_t fallback_chip_readw(const chipaddr addr)
-{
-	uint16_t val;
-	val = chip_readb(addr);
-	val |= chip_readb(addr + 1) << 8;
-	return val;
-}
-
-/* Little-endian fallback for drivers not supporting 32 bit accesses */
-void fallback_chip_writel(uint32_t val, chipaddr addr)
-{
-	chip_writew(val & 0xffff, addr);
-	chip_writew((val >> 16) & 0xffff, addr + 2);
-}
-
-/* Little-endian fallback for drivers not supporting 32 bit accesses */
-uint32_t fallback_chip_readl(const chipaddr addr)
-{
-	uint32_t val;
-	val = chip_readw(addr);
-	val |= chip_readw(addr + 2) << 16;
-	return val;
-}
-
-void fallback_chip_writen(uint8_t *buf, chipaddr addr, size_t len)
-{
-	size_t i;
-	for (i = 0; i < len; i++)
-		chip_writeb(buf[i], addr + i);
-	return;
-}
-
-void fallback_chip_readn(uint8_t *buf, chipaddr addr, size_t len)
-{
-	size_t i;
-	for (i = 0; i < len; i++)
-		buf[i] = chip_readb(addr + i);
-	return;
-}
-
-void register_par_programmer(const struct par_programmer *pgm, const enum chipbustype buses)
-{
-	par_programmer = pgm;
-	buses_supported |= buses;
-}
-
-struct programmer_alias aliases[] = {
-	{ "ec", ALIAS_EC },
-	{ "host", ALIAS_HOST },
-	{ NULL },
-};
-struct programmer_alias *alias;

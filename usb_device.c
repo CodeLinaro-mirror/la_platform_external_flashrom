@@ -1,38 +1,17 @@
 /*
  * This file is part of the flashrom project.
  *
- * Copyright 2015, Google Inc.
- * All rights reserved.
+ * Copyright (C) 2020, Google Inc. All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- *    * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *    * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *    * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * Alternatively, this software may be distributed under the terms of the
- * GNU General Public License ("GPL") version 2 as published by the Free
- * Software Foundation.
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include "programmer.h"
@@ -49,10 +28,11 @@
  * Possibly extract a programmer parameter and use it to initialize the given
  * match value structure.
  */
-static void usb_match_value_init(struct usb_match_value *match,
+static void usb_match_value_init(const struct programmer_cfg *cfg,
+				 struct usb_match_value *match,
 				 char const *parameter)
 {
-	char *string = extract_programmer_param(parameter);
+	char *string = extract_programmer_param_str(cfg, parameter);
 
 	match->name = parameter;
 
@@ -66,21 +46,21 @@ static void usb_match_value_init(struct usb_match_value *match,
 	free(string);
 }
 
-#define USB_MATCH_VALUE_INIT(NAME)			\
-	usb_match_value_init(&match->NAME, #NAME)
+#define USB_MATCH_VALUE_INIT(PPARAM, NAME)			\
+	usb_match_value_init(PPARAM, &match->NAME, #NAME)
 
-void usb_match_init(struct usb_match *match)
+void usb_match_init(const struct programmer_cfg *cfg, struct usb_match *match)
 {
-	USB_MATCH_VALUE_INIT(vid);
-	USB_MATCH_VALUE_INIT(pid);
-	USB_MATCH_VALUE_INIT(bus);
-	USB_MATCH_VALUE_INIT(address);
-	USB_MATCH_VALUE_INIT(config);
-	USB_MATCH_VALUE_INIT(interface);
-	USB_MATCH_VALUE_INIT(altsetting);
-	USB_MATCH_VALUE_INIT(class);
-	USB_MATCH_VALUE_INIT(subclass);
-	USB_MATCH_VALUE_INIT(protocol);
+	USB_MATCH_VALUE_INIT(cfg, vid);
+	USB_MATCH_VALUE_INIT(cfg, pid);
+	USB_MATCH_VALUE_INIT(cfg, bus);
+	USB_MATCH_VALUE_INIT(cfg, address);
+	USB_MATCH_VALUE_INIT(cfg, config);
+	USB_MATCH_VALUE_INIT(cfg, interface);
+	USB_MATCH_VALUE_INIT(cfg, altsetting);
+	USB_MATCH_VALUE_INIT(cfg, class);
+	USB_MATCH_VALUE_INIT(cfg, subclass);
+	USB_MATCH_VALUE_INIT(cfg, protocol);
 }
 
 void usb_match_value_default(struct usb_match_value *value,
@@ -120,7 +100,7 @@ static int check_match(struct usb_match_value const *match_value, int value)
 static void add_device(struct usb_device *device,
 		       struct usb_device **devices)
 {
-	struct usb_device *copy = malloc(sizeof(struct usb_device));
+	struct usb_device *copy = malloc(sizeof(*copy));
 
 	assert(copy != NULL);
 
@@ -194,11 +174,13 @@ static int find_config(struct usb_match const *match,
 	int i;
 
 	for (i = 0; i < device_descriptor->bNumConfigurations; ++i) {
-		CHECK(LIBUSB(libusb_get_config_descriptor(
-				     current->device,
-				     i,
-				     &current->config_descriptor)),
-		      "USB: Failed to get config descriptor");
+		int ret = LIBUSB(libusb_get_config_descriptor(
+				current->device, i,
+				&current->config_descriptor));
+		if (ret != 0) {
+			msg_perr("USB: Failed to get config descriptor");
+			return ret;
+		}
 
 		if (check_match(&match->config,
 				current->config_descriptor->
@@ -216,12 +198,15 @@ int usb_device_find(struct usb_match const *match, struct usb_device **devices)
 {
 	libusb_device **list;
 	ssize_t         count;
-	size_t          i;
+	ssize_t         i;
 
 	*devices = NULL;
 
-	CHECK(LIBUSB(count = libusb_get_device_list(NULL, &list)),
-	      "USB: Failed to get device list");
+	int ret = LIBUSB(count = libusb_get_device_list(NULL, &list));
+	if (ret != 0) {
+		msg_perr("USB: Failed to get device list");
+		return ret;
+	}
 
 	for (i = 0; i < count; ++i) {
 		struct libusb_device_descriptor descriptor;
@@ -238,19 +223,28 @@ int usb_device_find(struct usb_match const *match, struct usb_device **devices)
 			 bus,
 			 address);
 
-		CHECK(LIBUSB(libusb_get_device_descriptor(list[i],
-							  &descriptor)),
-		      "USB: Failed to get device descriptor");
+		ret = LIBUSB(libusb_get_device_descriptor(list[i],
+							  &descriptor));
+		if (ret != 0) {
+			msg_perr("USB: Failed to get device descriptor");
+			free(*devices);
+			*devices = NULL;
+			return ret;
+		}
 
 		if (check_match(&match->vid,     descriptor.idVendor) &&
 		    check_match(&match->pid,     descriptor.idProduct) &&
 		    check_match(&match->bus,     bus) &&
-		    check_match(&match->address, address))
-			CHECK(find_config(match,
+		    check_match(&match->address, address)) {
+			ret = find_config(match,
 					  &current,
 					  &descriptor,
-					  devices),
-			      "USB: Failed to find config");
+					  devices);
+			if (ret != 0) {
+				msg_perr("USB: Failed to find config");
+				return ret;
+			}
+		}
 	}
 
 	libusb_free_device_list(list, 1);
@@ -267,11 +261,13 @@ int usb_device_find(struct usb_match const *match, struct usb_device **devices)
  */
 static int usb_device_open(struct usb_device *device)
 {
-	int      current_config;
-
-	if (device->handle == NULL)
-		CHECK(LIBUSB(libusb_open(device->device, &device->handle)),
-		      "USB: Failed to open device\n");
+	if (device->handle == NULL) {
+		int ret = LIBUSB(libusb_open(device->device, &device->handle));
+		if (ret != 0) {
+			msg_perr("USB: Failed to open device\n");
+			return ret;
+		}
+	}
 
 	return 0;
 }
@@ -280,18 +276,29 @@ int usb_device_show(char const *prefix, struct usb_device *device)
 {
 	struct libusb_device_descriptor descriptor;
 	unsigned char                   product[256];
+	int ret;
 
-	CHECK(usb_device_open(device), "");
+	ret = usb_device_open(device);
+	if (ret != 0) {
+		msg_perr("USB: Failed to open device\n");
+		return ret;
+	}
 
-	CHECK(LIBUSB(libusb_get_device_descriptor(device->device, &descriptor)),
-	      "USB: Failed to get device descriptor\n");
+	ret = LIBUSB(libusb_get_device_descriptor(device->device, &descriptor));
+	if (ret != 0) {
+		msg_perr("USB: Failed to get device descriptor\n");
+		return ret;
+	}
 
-	CHECK(LIBUSB(libusb_get_string_descriptor_ascii(
+	ret = LIBUSB(libusb_get_string_descriptor_ascii(
 			     device->handle,
 			     descriptor.iProduct,
 			     product,
-			     sizeof(product))),
-	      "USB: Failed to get device product string\n");
+			     sizeof(product)));
+	if (ret != 0) {
+		msg_perr("USB: Failed to get device product string\n");
+		return ret;
+	}
 
 	product[255] = '\0';
 
@@ -308,43 +315,68 @@ int usb_device_claim(struct usb_device *device)
 {
 	int current_config;
 
-	CHECK(usb_device_open(device), "");
+	int ret = usb_device_open(device);
+	if (ret != 0) {
+		msg_perr("USB: Failed to open device\n");
+		return ret;
+	}
 
-	CHECK(LIBUSB(libusb_get_configuration(device->handle,
-					      &current_config)),
-	      "USB: Failed to get current device configuration\n");
+	ret = LIBUSB(libusb_get_configuration(device->handle,
+					      &current_config));
+	if (ret != 0) {
+		msg_perr("USB: Failed to get current device configuration\n");
+		return ret;
+	}
 
-	if (current_config != device->config_descriptor->bConfigurationValue)
-		CHECK(LIBUSB(libusb_set_configuration(
+	if (current_config != device->config_descriptor->bConfigurationValue) {
+		ret = LIBUSB(libusb_set_configuration(
 				     device->handle,
 				     device->
 				     config_descriptor->
-				     bConfigurationValue)),
-		      "USB: Failed to set new configuration from %d to %d\n",
-		      current_config,
-		      device->config_descriptor->bConfigurationValue);
+				     bConfigurationValue));
+		if (ret != 0) {
+			msg_perr("USB: Failed to set new configuration from %d to %d\n",
+					current_config,
+					device->config_descriptor->bConfigurationValue);
+			return ret;
+		}
+	}
 
-	CHECK(LIBUSB(libusb_set_auto_detach_kernel_driver(device->handle, 1)),
-	      "USB: Failed to enable auto kernel driver detach\n");
+	ret = libusb_detach_kernel_driver(device->handle,
+		device->interface_descriptor->bInterfaceNumber);
+	if (ret != 0 && ret != LIBUSB_ERROR_NOT_FOUND && ret != LIBUSB_ERROR_NOT_SUPPORTED) {
+		msg_perr("Cannot detach the existing usb driver. %s\n",
+				libusb_error_name(ret));
+		return ret;
+	}
 
-	CHECK(LIBUSB(libusb_claim_interface(device->handle,
+	ret = LIBUSB(libusb_claim_interface(device->handle,
 					    device->
 					    interface_descriptor->
-					    bInterfaceNumber)),
-	      "USB: Could not claim device interface %d\n",
-	      device->interface_descriptor->bInterfaceNumber);
+					    bInterfaceNumber));
+	if (ret != 0) {
+		msg_perr("USB: Could not claim device interface %d\n",
+				device->interface_descriptor->bInterfaceNumber);
+		libusb_attach_kernel_driver(device->handle,
+			device->interface_descriptor->bInterfaceNumber);
+		return ret;
+	}
 
-	if (device->interface_descriptor->bAlternateSetting != 0)
-		CHECK(LIBUSB(libusb_set_interface_alt_setting(
+	if (device->interface_descriptor->bAlternateSetting != 0) {
+		ret = LIBUSB(libusb_set_interface_alt_setting(
 				     device->handle,
 				     device->
 				     interface_descriptor->
 				     bInterfaceNumber,
 				     device->
 				     interface_descriptor->
-				     bAlternateSetting)),
-		      "USB: Failed to set alternate setting %d\n",
-		      device->interface_descriptor->bAlternateSetting);
+				     bAlternateSetting));
+		if (ret != 0) {
+			msg_perr("USB: Failed to set alternate setting %d\n",
+					device->interface_descriptor->bAlternateSetting);
+			return ret;
+		}
+	}
 
 	return 0;
 }
@@ -353,8 +385,13 @@ struct usb_device *usb_device_free(struct usb_device *device)
 {
 	struct usb_device *next = device->next;
 
-	if (device->handle != NULL)
+	if (device->handle != NULL) {
+		libusb_release_interface(device->handle,
+			device->interface_descriptor->bInterfaceNumber);
+		libusb_attach_kernel_driver(device->handle,
+			device->interface_descriptor->bInterfaceNumber);
 		libusb_close(device->handle);
+	}
 
 	/*
 	 * This unref balances the ref added in the add_device function.

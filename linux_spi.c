@@ -11,207 +11,74 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
  */
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <sys/fcntl.h>
+#include <stdint.h>
+#include <inttypes.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <ctype.h>
 #include <unistd.h>
-#include <linux/spi/spidev.h>
 #include <sys/ioctl.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include "file.h"
+#include <linux/types.h>
 #include "flash.h"
 #include "chipdrivers.h"
 #include "programmer.h"
 #include "spi.h"
+/*
+ * Linux versions prior to v4.14-rc7 may need linux/ioctl.h included here due
+ * to missing from linux/spi/spidev.h. This was fixed in the following commit:
+ * a2b4a79b88b2 spi: uapi: spidev: add missing ioctl header
+ */
+#include <linux/ioctl.h>
+#include <linux/spi/spidev.h>
 
+/* Devices known to work with this module (FIXME: export as struct dev_entry):
+ * Beagle Bone Black
+ * Raspberry Pi
+ * HummingBoard
+ */
 
+#define BUF_SIZE_FROM_SYSFS	"/sys/module/spidev/parameters/bufsiz"
 
-/* TODO: this information should come from the SPI master driver. */
-#define SPI_DMA_SIZE 64
-
-#ifndef SPIDEV_MAJOR
-#define SPIDEV_MAJOR 153  /* refer to kernel/files/drivers/spi/spidev.c */
-#endif
-
-#define MODALIAS_FILE		"modalias"
-#define LINUX_SPI_SYSFS_ROOT	"/sys/bus/spi/devices"
-
-static int fd = -1;
-
-static int linux_spi_shutdown(void *data);
-static int linux_spi_send_command(unsigned int writecnt, unsigned int readcnt,
-			const unsigned char *txbuf, unsigned char *rxbuf);
-static int linux_spi_read(struct flashchip *flash, uint8_t *buf,
-			  unsigned int start, unsigned int len);
-static int linux_spi_write_256(struct flashchip *flash, uint8_t *buf,
-			       unsigned int start, unsigned int len);
-
-static const struct spi_programmer spi_programmer_linux = {
-	.type		= SPI_CONTROLLER_LINUX,
-	.max_data_read	= MAX_DATA_UNSPECIFIED, /* TODO? */
-	.max_data_write	= MAX_DATA_UNSPECIFIED, /* TODO? */
-	.command	= linux_spi_send_command,
-	.multicommand	= default_spi_send_multicommand,
-	.read		= linux_spi_read,
-	.write_256	= linux_spi_write_256,
+struct linux_spi_data {
+	int fd;
+	size_t max_kernel_buf_size;
 };
 
-static char devfs_path[32]; 	/* at least big enough to fit /dev/spidevX.Y */
-static char *linux_spi_probe(void)
+static int linux_spi_read(struct flashctx *flash, uint8_t *buf, unsigned int start, unsigned int len)
 {
-	int i;
-	const char *sysfs_path = NULL;
-	char *p;
-	char *modalias[] = {
-		"spi:spidev",	/* raw access over SPI bus (newer kernels) */
-		"spidev",	/* raw access over SPI bus (older kernels) */
-		"m25p80",	/* generic MTD device */
-	};
-
-	for (i = 0; i < ARRAY_SIZE(modalias); i++) {
-		int major, minor;
-
-		/* Path should look like: /sys/blah/spiX.Y/modalias */
-		sysfs_path = scanft(LINUX_SPI_SYSFS_ROOT,
-				MODALIAS_FILE, modalias[i], 1);
-		if (!sysfs_path)
-			continue;
-
-		p = (char *)sysfs_path + strlen(LINUX_SPI_SYSFS_ROOT);
-		if (p[0] == '/')
-			p++;
-
-		if (sscanf(p, "spi%u.%u", &major, &minor) == 2) {
-			msg_pdbg("Found SPI device %s on spi%u.%u\n",
-				modalias[i], major, minor);
-			sprintf(devfs_path, "/dev/spidev%u.%u", major, minor);
-			free((void *)sysfs_path);
-			break;
-		}
-		free((void *)sysfs_path);
-	}
-
-	if (i == ARRAY_SIZE(modalias))
-		return NULL;
-	return devfs_path;
+	struct linux_spi_data *spi_data = flash->mst->spi.data;
+	/* Older kernels use a single buffer for combined input and output
+	   data. So account for longest possible command + address, too. */
+	return spi_read_chunked(flash, buf, start, len, spi_data->max_kernel_buf_size - 5);
 }
 
-/*
- * This is used when /dev/spidevX.Y is not created yet, for example, when
- * udev is not started.
- */
-static int manual_mknod(const char *dev)
+static int linux_spi_write_256(struct flashctx *flash, const uint8_t *buf, unsigned int start, unsigned int len)
 {
-	char cmd[256];
-
-	msg_pdbg("Creating SPI device node %s...\n", dev);
-	strcpy(cmd, "modprobe spidev");
-	msg_pdbg("CMD: [%s]\n", cmd);
-	if (system(cmd)) {
-		msg_perr("%s: failed to run '%s': %s\n", __func__,
-			 cmd, strerror(errno));
-		return -1;
-	}
-	snprintf(cmd, sizeof(cmd), "mknod %s c %d 0", dev, SPIDEV_MAJOR);
-	msg_pdbg("CMD: [%s]\n", cmd);
-	if (system(cmd)) {
-		msg_perr("%s: failed to run '%s': %s\n", __func__,
-			 cmd, strerror(errno));
-		return -1;
-	}
-
-	if ((fd = open(dev, O_RDWR)) == -1) {
-		msg_perr("%s: failed to open %s: %s\n", __func__,
-			 dev, strerror(errno));
-	}
-
-	return fd;
-}
-
-
-int linux_spi_init(void)
-{
-	char *p, *endp, *dev;
-	uint32_t speed = 0;
-
-	/*
-	 * FIXME: There might be other programmers with flash memory (such as
-	 * an EC) connected via SPI. For now we rely on the device's driver to
-	 * distinguish it and assume generic SPI implies host.
-	 */
-	if (alias && alias->type != ALIAS_HOST)
-		return 1;
-
-	dev = extract_programmer_param("dev");
-	if (!dev)
-		dev = linux_spi_probe();
-	if (!dev || !strlen(dev)) {
-		msg_perr("No SPI device found. Use flashrom -p "
-			 "linux_spi:dev=/dev/spidevX.Y\n");
-		return 1;
-	}
-
-	p = extract_programmer_param("speed");
-	if (p && strlen(p)) {
-		speed = (uint32_t)strtoul(p, &endp, 10) * 1024;
-		if (p == endp) {
-			msg_perr("%s: invalid clock: %s kHz\n", __func__, p);
-			return 1;
-		}
-	}
-
-	msg_pdbg("Using device %s\n", dev);
-	if ((fd = open(dev, O_RDWR)) == -1) {
-		msg_pdbg("%s: failed to open %s: %s\n", __func__,
-			 dev, strerror(errno));
-
-		if (manual_mknod(dev) == -1) {  // global fd is effected.
-			return 1;
-		}
-	}
-
-	if (speed > 0) {
-		if (ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed) == -1) {
-			msg_perr("%s: failed to set speed %dHz: %s\n",
-				 __func__, speed, strerror(errno));
-			close(fd);
-			return 1;
-		}
-
-		msg_pdbg("Using %d kHz clock\n", speed);
-	}
-
-	if (register_shutdown(linux_spi_shutdown, NULL))
-		return 1;
-
-	register_spi_programmer(&spi_programmer_linux);
-
-	return 0;
+	struct linux_spi_data *spi_data = flash->mst->spi.data;
+	/* 5 bytes must be reserved for longest possible command + address. */
+	return spi_write_chunked(flash, buf, start, len, spi_data->max_kernel_buf_size - 5);
 }
 
 static int linux_spi_shutdown(void *data)
 {
-	if (fd != -1) {
-		close(fd);
-		fd = -1;
-	}
+	struct linux_spi_data *spi_data = data;
+	close(spi_data->fd);
+	free(spi_data);
 	return 0;
 }
 
-static int linux_spi_send_command(unsigned int writecnt, unsigned int readcnt,
-			const unsigned char *txbuf, unsigned char *rxbuf)
+static int linux_spi_send_command(const struct flashctx *flash, unsigned int writecnt,
+				  unsigned int readcnt,
+				  const unsigned char *txbuf,
+				  unsigned char *rxbuf)
 {
-	int msg_start = 0, msg_count = 0;
+	struct linux_spi_data *spi_data = flash->mst->spi.data;
+	int iocontrol_code;
 	struct spi_ioc_transfer msg[2] = {
 		{
 			.tx_buf = (uint64_t)(uintptr_t)txbuf,
@@ -223,42 +90,162 @@ static int linux_spi_send_command(unsigned int writecnt, unsigned int readcnt,
 		},
 	};
 
-	if (fd == -1)
+	if (spi_data->fd == -1)
 		return -1;
+	/* The implementation currently does not support requests that
+	   don't start with sending a command. */
+	if (writecnt == 0)
+		return SPI_INVALID_LENGTH;
 
-	/* Only pass necessary msg[] to ioctl() to avoid the empty message
-	 * which drives an un-expected CS line and clocks. */
-	if (writecnt) {
-		msg_start = 0;  /* tx: msg[0] */
-		msg_count++;
-		if (readcnt) {
-			msg_count++;
-		}
-	} else if (readcnt) {
-		msg_start = 1;  /* rx: msg[1] */
-		msg_count++;
-	} else {
-		msg_cerr("%s: both writecnt and readcnt are 0.\n",
-			 __func__);
-		return -1;
-	}
+	/* Just submit the first (write) request in case there is nothing
+	   to read. Otherwise submit both requests. */
+	if (readcnt == 0)
+		iocontrol_code = SPI_IOC_MESSAGE(1);
+	else
+		iocontrol_code = SPI_IOC_MESSAGE(2);
 
-	if (ioctl(fd, SPI_IOC_MESSAGE(msg_count), &msg[msg_start]) == -1) {
+	if (ioctl(spi_data->fd, iocontrol_code, msg) == -1) {
 		msg_cerr("%s: ioctl: %s\n", __func__, strerror(errno));
 		return -1;
 	}
 	return 0;
 }
 
-static int linux_spi_read(struct flashchip *flash, uint8_t *buf,
-			  unsigned int start, unsigned int len)
+static const struct spi_master spi_master_linux = {
+	.features	= SPI_MASTER_4BA,
+	.max_data_read	= MAX_DATA_UNSPECIFIED, /* TODO? */
+	.max_data_write	= MAX_DATA_UNSPECIFIED, /* TODO? */
+	.command	= linux_spi_send_command,
+	.read		= linux_spi_read,
+	.write_256	= linux_spi_write_256,
+	.shutdown	= linux_spi_shutdown,
+};
+
+/* Read max buffer size from sysfs, or use page size as fallback. */
+static size_t get_max_kernel_buf_size()
 {
-	return spi_read_chunked(flash, buf, start, len, SPI_DMA_SIZE);
+	size_t result = 0;
+	FILE *fp;
+	fp = fopen(BUF_SIZE_FROM_SYSFS, "r");
+	if (!fp) {
+		msg_pwarn("Cannot open %s: %s.\n", BUF_SIZE_FROM_SYSFS, strerror(errno));
+		goto out;
+	}
+
+	char buf[10];
+	if (!fgets(buf, sizeof(buf), fp)) {
+		if (feof(fp))
+			msg_pwarn("Cannot read %s: file is empty.\n", BUF_SIZE_FROM_SYSFS);
+		else
+			msg_pwarn("Cannot read %s: %s.\n", BUF_SIZE_FROM_SYSFS, strerror(errno));
+		goto out;
+	}
+
+	long int tmp;
+	errno = 0;
+	tmp = strtol(buf, NULL, 0);
+	if ((tmp < 0) || errno) {
+		msg_pwarn("Buffer size %ld from %s seems wrong.\n", tmp, BUF_SIZE_FROM_SYSFS);
+	} else {
+		msg_pdbg("%s: Using value from %s as max buffer size.\n", __func__, BUF_SIZE_FROM_SYSFS);
+		result = (size_t)tmp;
+	}
+
+out:
+	if (fp)
+		fclose(fp);
+
+	if (!result) {
+		msg_pdbg("%s: Using page size as max buffer size.\n", __func__);
+		result = (size_t)getpagesize();
+	}
+	return result;
 }
 
-static int linux_spi_write_256(struct flashchip *flash, uint8_t *buf,
-			       unsigned int start, unsigned int len)
+static int linux_spi_init(const struct programmer_cfg *cfg)
 {
-	return spi_write_chunked(flash, buf, start, len,
-				 SPI_DMA_SIZE - 5 /* WREN, Page Program */);
+	char *param_str, *endp;
+	uint32_t speed_hz = 2 * 1000 * 1000;
+	/* FIXME: make the following configurable by CLI options. */
+	/* SPI mode 0 (beware this also includes: MSB first, CS active low and others */
+	const uint8_t mode = SPI_MODE_0;
+	const uint8_t bits = 8;
+	int fd;
+	size_t max_kernel_buf_size;
+	struct linux_spi_data *spi_data;
+
+	param_str = extract_programmer_param_str(cfg, "spispeed");
+	if (param_str && strlen(param_str)) {
+		speed_hz = (uint32_t)strtoul(param_str, &endp, 10) * 1000;
+		if (param_str == endp || speed_hz == 0) {
+			msg_perr("%s: invalid clock: %s kHz\n", __func__, param_str);
+			free(param_str);
+			return 1;
+		}
+	} else {
+		msg_pinfo("Using default %"PRIu32
+			  "kHz clock. Use 'spispeed' parameter to override.\n",
+			  speed_hz / 1000);
+	}
+	free(param_str);
+
+	param_str = extract_programmer_param_str(cfg, "dev");
+	if (!param_str || !strlen(param_str)) {
+		msg_perr("No SPI device given. Use flashrom -p "
+			 "linux_spi:dev=/dev/spidevX.Y\n");
+		free(param_str);
+		return 1;
+	}
+
+	msg_pdbg("Using device %s\n", param_str);
+	if ((fd = open(param_str, O_RDWR)) == -1) {
+		msg_perr("%s: failed to open %s: %s\n", __func__,
+			 param_str, strerror(errno));
+		free(param_str);
+		return 1;
+	}
+	free(param_str);
+
+	if (ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed_hz) == -1) {
+		msg_perr("%s: failed to set speed to %"PRIu32"Hz: %s\n",
+			 __func__, speed_hz, strerror(errno));
+		goto init_err;
+	}
+	msg_pdbg("Using %"PRIu32"kHz clock\n", speed_hz / 1000);
+
+	if (ioctl(fd, SPI_IOC_WR_MODE, &mode) == -1) {
+		msg_perr("%s: failed to set SPI mode to 0x%02x: %s\n",
+			 __func__, mode, strerror(errno));
+		goto init_err;
+	}
+
+	if (ioctl(fd, SPI_IOC_WR_BITS_PER_WORD, &bits) == -1) {
+		msg_perr("%s: failed to set the number of bits per SPI word to %u: %s\n",
+			 __func__, bits == 0 ? 8 : bits, strerror(errno));
+		goto init_err;
+	}
+
+	max_kernel_buf_size = get_max_kernel_buf_size();
+	msg_pdbg("%s: max_kernel_buf_size: %zu\n", __func__, max_kernel_buf_size);
+
+	spi_data = calloc(1, sizeof(*spi_data));
+	if (!spi_data) {
+		msg_perr("Unable to allocated space for SPI master data\n");
+		goto init_err;
+	}
+	spi_data->fd = fd;
+	spi_data->max_kernel_buf_size = max_kernel_buf_size;
+
+	return register_spi_master(&spi_master_linux, spi_data);
+
+init_err:
+	close(fd);
+	return 1;
 }
+
+const struct programmer_entry programmer_linux_spi = {
+	.name			= "linux_spi",
+	.type			= OTHER,
+	.devs.note		= "Device files /dev/spidev*.*\n",
+	.init			= linux_spi_init,
+};
