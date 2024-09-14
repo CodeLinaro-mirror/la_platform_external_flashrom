@@ -1,3 +1,7 @@
-include platform/system/core:main:/janitors/OWNERS
-
-czapiga@google.com
+nartemiev@google.com
+pgeorgi@google.com
+pmarheine@chromium.org
+quasisec@chromium.org
+sammc@chromium.org
+roccochen@chromium.org
+jjsu@chromium.org
