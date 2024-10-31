@@ -400,7 +400,7 @@ static OPCODES O_ST_M25P = {
  * It is used to reprogram the chipset OPCODE table on-the-fly if an opcode
  * is needed which is currently not in the chipset OPCODE table
  */
-static OPCODE POSSIBLE_OPCODES[] = {
+static const OPCODE POSSIBLE_OPCODES[] = {
 	 {JEDEC_BYTE_PROGRAM, SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS, 0},	// Write Byte
 	 {JEDEC_READ, SPI_OPCODE_TYPE_READ_WITH_ADDRESS, 0},	// Read Data
 	 {JEDEC_BE_D8, SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS, 0},	// Erase Sector
@@ -662,7 +662,7 @@ static int reprogram_opcode_on_the_fly(uint8_t opcode, unsigned int writecnt, un
 		else // we have an invalid case
 			return SPI_INVALID_LENGTH;
 	}
-	int oppos = 2;	// use original JEDEC_BE_D8 offset
+	int oppos = 4;	// use the original position of JEDEC_REMS
 	curopcodes->opcode[oppos].opcode = opcode;
 	curopcodes->opcode[oppos].spi_type = spi_type;
 	program_opcodes(curopcodes, 0, ich_generation);
@@ -2152,6 +2152,7 @@ static void init_chipset_properties(struct swseq_data *swseq, struct hwseq_data 
 	case CHIPSET_400_SERIES_COMET_POINT:
 	case CHIPSET_500_SERIES_TIGER_POINT:
 	case CHIPSET_600_SERIES_ALDER_POINT:
+	case CHIPSET_700_SERIES_RAPTOR_POINT:
 	case CHIPSET_APOLLO_LAKE:
 	case CHIPSET_GEMINI_LAKE:
 	case CHIPSET_JASPER_LAKE:
@@ -2193,6 +2194,7 @@ static void init_chipset_properties(struct swseq_data *swseq, struct hwseq_data 
 	case CHIPSET_400_SERIES_COMET_POINT:
 	case CHIPSET_500_SERIES_TIGER_POINT:
 	case CHIPSET_600_SERIES_ALDER_POINT:
+	case CHIPSET_700_SERIES_RAPTOR_POINT:
 	case CHIPSET_APOLLO_LAKE:
 	case CHIPSET_GEMINI_LAKE:
 	case CHIPSET_JASPER_LAKE:
@@ -2256,6 +2258,7 @@ static int init_ich_default(const struct programmer_cfg *cfg, void *spibar, enum
 	case CHIPSET_400_SERIES_COMET_POINT:
 	case CHIPSET_500_SERIES_TIGER_POINT:
 	case CHIPSET_600_SERIES_ALDER_POINT:
+	case CHIPSET_700_SERIES_RAPTOR_POINT:
 	case CHIPSET_APOLLO_LAKE:
 	case CHIPSET_GEMINI_LAKE:
 	case CHIPSET_JASPER_LAKE:
@@ -2337,6 +2340,7 @@ static int init_ich_default(const struct programmer_cfg *cfg, void *spibar, enum
 		case CHIPSET_400_SERIES_COMET_POINT:
 		case CHIPSET_500_SERIES_TIGER_POINT:
 		case CHIPSET_600_SERIES_ALDER_POINT:
+		case CHIPSET_700_SERIES_RAPTOR_POINT:
 		case CHIPSET_APOLLO_LAKE:
 		case CHIPSET_GEMINI_LAKE:
 		case CHIPSET_JASPER_LAKE:
@@ -2378,6 +2382,7 @@ static int init_ich_default(const struct programmer_cfg *cfg, void *spibar, enum
 		case CHIPSET_400_SERIES_COMET_POINT:
 		case CHIPSET_500_SERIES_TIGER_POINT:
 		case CHIPSET_600_SERIES_ALDER_POINT:
+		case CHIPSET_700_SERIES_RAPTOR_POINT:
 		case CHIPSET_APOLLO_LAKE:
 		case CHIPSET_GEMINI_LAKE:
 		case CHIPSET_JASPER_LAKE:
@@ -2417,6 +2422,7 @@ static int init_ich_default(const struct programmer_cfg *cfg, void *spibar, enum
 	     ich_gen == CHIPSET_400_SERIES_COMET_POINT ||
 	     ich_gen == CHIPSET_500_SERIES_TIGER_POINT ||
 	     ich_gen == CHIPSET_600_SERIES_ALDER_POINT ||
+	     ich_gen == CHIPSET_700_SERIES_RAPTOR_POINT ||
 	     ich_gen == CHIPSET_C740_SERIES_EMMITSBURG)) {
 		msg_pdbg("Enabling hardware sequencing by default for 100+ series PCH.\n");
 		ich_spi_mode = ich_hwseq;
