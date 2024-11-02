@@ -94,6 +94,7 @@ cc_library {
     host_supported: true,
     vendor_available: true,
     visibility: ["//external/vboot_reference"],
+    init_rc: ["flashrom.rc"],
 
     target: {
         linux: {
