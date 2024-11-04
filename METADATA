@@ -13,6 +13,9 @@ third_party {
   }
   homepage: "https://flashrom.org/"
   identifier {
+    type: "Git"
+    value: "https://chromium.googlesource.com/chromiumos/third_party/flashrom/"
+    primary_source: true
     version: "05d781e93d8967799d7580da2994af996db71c65"
   }
 }
