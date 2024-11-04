@@ -70,5 +70,11 @@ bool is_chipname_duplicate(const struct flashchip *chip)
 	   !strcmp(chip->name, "W25Q32JW...Q"))
 		return true;
 
+	/* The "GD25LQ255E" and "GD25LB256F/GD25LR256F" and chip entries
+	 * have the same vendor and model IDs.
+	 * Marking the latter as duplicate.
+	 */
+	if(!strcmp(chip->name, "GD25LB256F/GD25LR256F")) return true;
+
 	return false;
 }
