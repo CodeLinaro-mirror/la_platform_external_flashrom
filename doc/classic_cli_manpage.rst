@@ -622,6 +622,18 @@ Example::
         syntax where ``state`` is ``yes`` or ``no`` (default value). ``yes`` means active state of the pin implies that chip is
         write-protected (on real hardware the pin is usually negated, but not here).
 
+**Frequency**
+	Frequency can be specified in ``Hz`` (default), ``KHz``, or ``MHz`` (not case sensitive).
+	If ``freq`` parameter is passed in from command line, commands will delay for certain time before returning,
+	so that to emulate the requested frequency.
+
+	Valid range is [1Hz, 8000Mhz] and there is no delay by default.
+
+	The delay of an SPI command is proportional to the number of bits send over SPI bus in both directions
+	and is calculated based on the assumption that we transfer at 1 bit/Hz::
+
+		flashrom -p dummy:emulate=W25Q128FV,freq=64mhz
+
 
 nic3com, nicrealtek, nicnatsemi, nicintel, nicintel_eeprom, nicintel_spi, gfxnvidia, ogp_spi, drkaiser, satasii, satamv, atahpt, atavia, atapromise, it8212 programmers
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -636,6 +648,7 @@ is the PCI function number of the desired device. Example::
 
         flashrom -p nic3com:pci=05:04.0
 
+Some of these programmers have more info below.
 
 atavia programmer
 ^^^^^^^^^^^^^^^^^
@@ -655,6 +668,18 @@ This programmer is currently limited to 32 kB, regardless of the actual size of 
 fact that, on the tested device (a Promise Ultra100), not all of the chip's address lines were actually connected.
 You may use this programmer to flash firmware updates, since these are only 16 kB in size (padding to 32 kB is required).
 
+nic3com programmer
+^^^^^^^^^^^^^^^^^^
+
+flashrom supports some 3Com network cards to reflash the (parallel) flash attached to these cards,
+but it is also possible to use these cards to reflash other chips which fit in there electrically.
+Please note that the small number of address lines connected to the chip may make accessing large chips impossible.
+The maximum supported chip size is 128KB.
+
+nicintel_spi programmer
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Programmer for SPI flash ROMs on Intel Gigabit network cards. Tested on 32-bit hardware/PCI only.
 
 nicintel_eeprom programmer
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -666,6 +691,18 @@ themselves to be identified, the controller relies on correct size values writte
 Intel specifies following EEPROMs to be compatible:
 Atmel AT25128, AT25256, Micron (ST) M95128, M95256 and OnSemi (Catalyst) CAT25CS128.
 
+gfxnvidia programmer
+^^^^^^^^^^^^^^^^^^^^
+
+Flashrom supports some Nvidia graphic cards to reflash the (parallel) flash attached to these cards,
+but it is also possible to use these cards to reflash other chips which fit in there electrically.
+
+satasii programmer
+^^^^^^^^^^^^^^^^^^
+
+Flashrom supports some SiI ATA/SATA controllers to reflash the flash attached to these controller cards,
+but it is also possible to use these cards to reflash other chips which fit in there electrically.
+Please note that the small number of address lines connected to the chip may make accessing large chips impossible.
 
 ft2232_spi programmer
 ^^^^^^^^^^^^^^^^^^^^^
@@ -1021,8 +1058,14 @@ as per the device.
 ch347_spi programmer
 ^^^^^^^^^^^^^^^^^^^^
 
-The WCH CH347 programmer does not currently support any parameters. SPI frequency is fixed at 2 MHz, and CS0 is used
-as per the device.
+An optional ``spispeed`` parameter could be used to specify the SPI speed. This parameter is available for the CH347T and CH347F device.
+The default SPI speed is 15MHz if no value is specified.
+Syntax is::
+
+        flashrom -p ch347_spi:spispeed=value
+
+where ``value`` can be ``60M``, ``30M``, ``15M``, ``7.5M``, ``3.75M``, ``1.875M``, ``937.5K``, ``468.75K``.
+
 
 ni845x_spi programmer
 ^^^^^^^^^^^^^^^^^^^^^
