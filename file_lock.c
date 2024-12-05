@@ -88,23 +88,11 @@ static int test_dir(const char *path)
 	return 0;
 }
 
-#define SYSTEM_LOCKFILE_DIR	"/run/lock"
-static int file_lock_open_or_create(struct ipc_lock *lock)
+static int file_lock_try_open_or_create(const char *dir, struct ipc_lock *lock)
 {
 	char path[PATH_MAX];
-	const char *dir = SYSTEM_LOCKFILE_DIR;
-#ifdef __ANDROID__
-	const char fallback[] = "/data/local/tmp";
-#else
-	const char fallback[] = "/tmp";
-#endif
-
-	if (test_dir(dir)) {
-		dir = fallback;
-		msg_gerr("Trying fallback directory: %s\n", dir);
-		if (test_dir(dir))
-			return -1;
-	}
+	if (test_dir(dir))
+		return -1;
 
 	if (snprintf(path, sizeof(path), "%s/%s", dir, lock->filename) < 0)
 		return -1;
@@ -122,6 +110,37 @@ static int file_lock_open_or_create(struct ipc_lock *lock)
 
 	msg_gdbg("Opened file lock \"%s\"\n", path);
 	return 0;
+}
+
+static int file_lock_open_or_create(struct ipc_lock *lock)
+{
+	const char *dirs[] = {
+#ifndef __ANDROID__
+	// Default modern Linux lock path.
+	"/run/lock",
+	// Fallback to temporary directory.
+	"/tmp",
+#else
+	// flashrom called as a subprocess with its own SELinux context.
+	"/data/vendor/flashrom/tmp",
+	// Same as above but for case when there is no tmpfs.
+	"/data/vendor/flashrom",
+	// flashrom called from the console/shell. Comes last as a fallback.
+	"/data/local/tmp",
+#endif
+	};
+
+	if (file_lock_try_open_or_create(dirs[0], lock) == 0)
+		return 0;
+
+	for (size_t i = 1; i < ARRAY_SIZE(dirs); ++i) {
+		msg_gwarn("Trying fallback directory: %s\n", dirs[i]);
+		if (file_lock_try_open_or_create(dirs[i], lock) == 0)
+			return 0;
+	}
+
+	msg_gerr("Failed to find usable directory for file lock\n");
+	return -1;
 }
 
 static int file_lock_get(struct ipc_lock *lock, int timeout_msecs)
