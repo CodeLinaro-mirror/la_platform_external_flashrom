@@ -92,7 +92,9 @@ cc_library {
     name: "libflashrom",
     defaults: ["flashrom_defaults"],
     host_supported: true,
+    vendor_available: true,
     visibility: ["//external/vboot_reference"],
+    init_rc: ["flashrom.rc"],
 
     target: {
         linux: {
@@ -261,6 +263,7 @@ cc_library {
 cc_binary {
     name: "flashrom",
     defaults: ["flashrom_defaults"],
+    vendor: true,
 
     srcs: [
         "cli_classic.c",
