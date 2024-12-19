@@ -1,7 +1,4 @@
-nartemiev@google.com
-pgeorgi@google.com
-pmarheine@chromium.org
-quasisec@chromium.org
-sammc@chromium.org
-roccochen@chromium.org
-jjsu@chromium.org
+include chromiumos/owners:v1:/firmware/OWNERS.flashrom
+
+# ChromeOS Prod
+chromeos-ci-prod@chromeos-bot.iam.gserviceaccount.com #{LAST_RESORT_SUGGESTION}
