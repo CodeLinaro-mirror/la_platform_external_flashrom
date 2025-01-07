@@ -410,48 +410,6 @@ static int wp_cli(
 	return 0;
 }
 
-static char *get_optional_filename(char *argv[])
-{
-	char *filename = NULL;
-
-	/* filename was supplied in optarg (i.e. -rfilename) */
-	if (optarg != NULL)
-		filename = strdup(optarg);
-	/* filename is on optind if it is not another flag (i.e. -r filename)
-	 * - is treated as stdin, so we still strdup in this case
-	 */
-	else if (optarg == NULL && argv[optind] != NULL &&
-		 (argv[optind][0] != '-' || argv[optind][1] == '\0'))
-		filename = strdup(argv[optind++]);
-
-	return filename;
-}
-
-static int flashrom_layout_read_fmap_from_file(struct flashrom_layout **layout,
-					       struct flashrom_flashctx *flashctx, const char *fmapfile)
-{
-	int ret = 1;
-	struct stat s;
-	if (stat(fmapfile, &s) != 0) {
-		return ret;
-	}
-
-	size_t fmapfile_size = s.st_size;
-	uint8_t *fmapfile_buffer = malloc(fmapfile_size);
-	if (!fmapfile_buffer) {
-		return ret;
-	}
-
-	if (read_buf_from_file(fmapfile_buffer, fmapfile_size, fmapfile)) {
-		goto out;
-	}
-
-	ret = flashrom_layout_read_fmap_from_buffer(layout, flashctx, fmapfile_buffer, fmapfile_size);
-out:
-	free(fmapfile_buffer);
-	return ret;
-}
-
 /**
  * @brief Reads content to buffer from one or more files.
  *
@@ -514,6 +472,48 @@ static int write_buf_to_include_args(const struct flashrom_layout *const layout,
 	}
 
 	return 0;
+}
+
+static char *get_optional_filename(char *argv[])
+{
+	char *filename = NULL;
+
+	/* filename was supplied in optarg (i.e. -rfilename) */
+	if (optarg != NULL)
+		filename = strdup(optarg);
+	/* filename is on optind if it is not another flag (i.e. -r filename)
+	 * - is treated as stdin, so we still strdup in this case
+	 */
+	else if (optarg == NULL && argv[optind] != NULL &&
+		 (argv[optind][0] != '-' || argv[optind][1] == '\0'))
+		filename = strdup(argv[optind++]);
+
+	return filename;
+}
+
+static int flashrom_layout_read_fmap_from_file(struct flashrom_layout **layout,
+					       struct flashrom_flashctx *flashctx, const char *fmapfile)
+{
+	int ret = 1;
+	struct stat s;
+	if (stat(fmapfile, &s) != 0) {
+		return ret;
+	}
+
+	size_t fmapfile_size = s.st_size;
+	uint8_t *fmapfile_buffer = malloc(fmapfile_size);
+	if (!fmapfile_buffer) {
+		return ret;
+	}
+
+	if (read_buf_from_file(fmapfile_buffer, fmapfile_size, fmapfile)) {
+		goto out;
+	}
+
+	ret = flashrom_layout_read_fmap_from_buffer(layout, flashctx, fmapfile_buffer, fmapfile_size);
+out:
+	free(fmapfile_buffer);
+	return ret;
 }
 
 static int do_read(struct flashctx *const flash, const char *const filename)
