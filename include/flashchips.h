@@ -394,8 +394,9 @@
 #define GIGADEVICE_GD25Q16	0x4015	/* Same as GD25Q16B (which has OTP) */
 #define GIGADEVICE_GD25Q32	0x4016	/* Same as GD25Q32B */
 #define GIGADEVICE_GD25Q64	0x4017	/* Same as GD25Q64B */
-#define GIGADEVICE_GD25Q128	0x4018	/* Same as GD25Q128B, GD25Q127C, GD25Q128C, and GD25Q128E, can be distinguished by SFDP */
-#define GIGADEVICE_GD25Q256D	0x4019
+#define GIGADEVICE_GD25Q128	0x4018	/* Same as GD25Q128B, GD25Q127C, GD25Q128C,and GD25Q128E, GD25B128E, GD25R128E can be distinguished by SFDP */
+#define GIGADEVICE_GD25Q256D	0x4019	/* Same as GD25B256E, GD25Q256E, GD25R256E	*/
+#define GIGADEVICE_GD25B512MF	0x401A  /* Same as GD25R512MF */
 #define GIGADEVICE_GD25VQ21B	0x4212
 #define GIGADEVICE_GD25VQ41B	0x4213  /* Same as GD25VQ40C, can be distinguished by SFDP */
 #define GIGADEVICE_GD25VQ80C	0x4214
@@ -549,6 +550,7 @@
 #define MACRONIX_MX25L6495F	0x9517
 #define MACRONIX_MX25L3255E	0x9e16
 #define MACRONIX_MX77L25650F	0x7519
+#define MACRONIX_MX77U25650F	0x7539
 #define MACRONIX_MX77U51250F	0x753A
 #define MACRONIX_MX25L3239E     0x2536
 
@@ -700,7 +702,6 @@
 #define SPANSION_S25FL064A	0x0216	/* Same as S25FL064P, but the latter supports EDI and CFI */
 #define SPANSION_S25FL128	0x2018	/* Same ID for various S25FL127S, S25FL128P, S25FL128S and S25FL129P (including dual-die S70FL256P) variants (EDI supported) */
 #define SPANSION_S25FL256	0x0219
-#define SPANSION_S25FL512	0x0220
 #define SPANSION_S25FL204	0x4013
 #define SPANSION_S25FL208	0x4014
 #define SPANSION_S25FL216	0x4015	/* Same as S25FL216K, but the latter supports OTP, 3 status regs, quad I/O, SFDP etc. */
@@ -709,6 +710,7 @@
 #define SPANSION_S25FL164K	0x4017
 #define SPANSION_S25FL128L	0x6018
 #define SPANSION_S25FL256L	0x6019
+#define SPANSION_S25FL512S_UL	0x02200080  /* Uniform Large (256kB) sectors */
 #define SPANSION_S25FS128S_L	0x20180081  /* Large sectors. */
 #define SPANSION_S25FS128S_S	0x20180181  /* Small sectors. */
 #define SPANSION_S25FS256S_L	0x02190081  /* Large sectors. */
@@ -717,6 +719,7 @@
 #define SPANSION_S25FL128S_US	0x20180180  /* Uniform Small (64kB) sectors */
 #define SPANSION_S25FL256S_UL	0x02190080  /* Uniform Large (128kB) sectors */
 #define SPANSION_S25FL256S_US	0x02190180  /* Uniform Small (64kB) sectors */
+#define SPANSION_S25FS512S_UL	0x02200081  /* Uniform Large (256kB) sectors */
 
 /* Spansion 29GL families got a suffix indicating the process technology but share the same 3-Byte IDs. They can
  * however be differentiated by CFI byte 45h. Some versions exist which have special top or bottom boot sectors
@@ -862,6 +865,7 @@
 #define XMC_XM25QU16C		0x5015
 #define XMC_XM25QH32C		0x4016	/* Same as XM25QH32D */
 #define XMC_XM25QU32C		0x5016
+#define XMC_XM25QH64A   	0x7017
 #define XMC_XM25QH128A		0x7018
 #define XMC_XM25QH128C		0x4018	/* Same as XM25QH128D */
 #define XMC_XM25QU128C		0x4118	/* Same as XM25QU128D */
@@ -1026,6 +1030,7 @@
 #define WINBOND_NEX_W25Q64_W	0x6017	/* W25Q64DW; W25Q64FV in QPI mode */
 #define WINBOND_NEX_W25Q128_W	0x6018	/* W25Q128FW; W25Q128FV in QPI mode */
 #define WINBOND_NEX_W25Q256_W	0x6019	/* W25Q256JW */
+#define WINBOND_NEX_W25R512NW	0x6020	/* W25R512NW/W74M51NW */
 #define WINBOND_NEX_W25Q16JV_M	0x7015	/* W25Q16JV_M (QE=0) */
 #define WINBOND_NEX_W25Q32JV_M	0x7016	/* W25Q32JV_M (QE=0) */
 #define WINBOND_NEX_W25Q64JV	0x7017	/* W25Q64JV */
