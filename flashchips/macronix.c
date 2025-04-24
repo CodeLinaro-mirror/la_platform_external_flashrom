@@ -2979,6 +2979,7 @@
 		.voltage	= {1650, 2000},
 		.reg_bits =
 		{
+			.srp    = {STATUS1, 7, RW},
 			.bp     = {{STATUS1, 2, RW}, {STATUS1, 3, RW}, {STATUS1, 4, RW}, {STATUS1, 5, RW}},
 			.tb     = {CONFIG, 3, OTP},
 			.wps    = {SECURITY, 7, OTP},
