@@ -488,7 +488,7 @@ internal programmer
 **Laptops**
         Using **flashrom** on older laptops that don't boot from the SPI bus is dangerous and may easily make your hardware unusable
         (see also the **BUGS** section). The embedded controller (EC) in some machines may interact badly with flashing.
-        More information is `in the wiki <https://flashrom.org/Laptops>`_.
+        More information is at :doc:`/contrib_howtos/laptops_and_ec`.
         Problems occur when the flash chip is shared between BIOS and EC firmware, and the latter does not expect **flashrom**
         to access the chip. While **flashrom** tries to change the contents of that memory the EC might need to fetch new
         instructions or data from it and could stop working correctly. Probing for and reading from the chip may also irritate
@@ -1402,7 +1402,7 @@ Laptops
 Using **flashrom** on older laptops is dangerous and may easily make your hardware unusable. **flashrom** will attempt to detect
 if it is running on a susceptible laptop and restrict flash-chip probing for safety reasons. Please see the detailed
 discussion of this topic and associated **flashrom** options in the **Laptops** paragraph in the **internal programmer**
-subsection of the **PROGRAMMER-SPECIFIC INFORMATION** section and the information `in our wiki <https://flashrom.org/Laptops>`_.
+subsection of the **PROGRAMMER-SPECIFIC INFORMATION** section and the information at :doc:`/contrib_howtos/laptops_and_ec`.
 
 One-time programmable (OTP) memory and unique IDs
 
@@ -1429,14 +1429,12 @@ Please see the individual files.
 AUTHORS
 -------
 
-Andrew Morgan, Anastasia Klimchuk, Carl-Daniel Hailfinger, Claus Gindhart, David Borg, David Hendricks, Dominik Geyer,
-Edward O'Callaghan, Eric Biederman, Giampiero Giancipoli, Helge Wagner, Idwer Vollering, Joe Bao, Joerg Fischer,
-Joshua Roys, Kyösti Mälkki, Luc Verhaegen, Li-Ta Lo, Mark Marshall, Markus Boas, Mattias Mattsson, Michael Karcher,
-Nikolay Petukhov, Patrick Georgi, Peter Lemenkov, Peter Stuge, Reinder E.N. de Haan, Ronald G. Minnich, Ronald Hoogenboom,
-Sean Nelson, Stefan Reinauer, Stefan Tauner, Stefan Wildemann, Stephan Guilloux, Steven James, Urja Rannikko, Uwe Hermann,
-Wang Qingpei, Yinghai Lu and others, please see the **flashrom** git history for details.
+More than 350 authors have contributed to Flashrom over its life. Each individual
+is credited in the `hall of fame <https://flashrom.org/about_flashrom/hall_of_fame.html>`_,
+or author metadata can be found in the git history.
 
 All still active authors can be reached via `the mailing list <flashrom\@flashrom.org>`_.
 
-This manual page was written by `Uwe Hermann <uwe\@hermann-uwe.de>`_, Carl-Daniel Hailfinger, Stefan Tauner and others.
-It is licensed under the terms of the GNU GPL (version 2 or later).
+This manual page was written by `Uwe Hermann <uwe\@hermann-uwe.de>`_,
+Carl-Daniel Hailfinger, Stefan Tauner and others.  It is licensed under the
+terms of the GNU GPL (version 2 or later).

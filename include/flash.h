@@ -663,14 +663,7 @@ erasefunc_t *lookup_erase_func_ptr(const struct block_eraser *const eraser);
 /* cli_common.c */
 void print_chip_support_status(const struct flashchip *chip);
 
-/* cli_output.c */
-extern enum flashrom_log_level verbose_screen;
-extern enum flashrom_log_level verbose_logfile;
-int open_logfile(const char * const filename);
-int close_logfile(void);
-void start_logging(void);
-int flashrom_print_cb(enum flashrom_log_level level, const char *fmt, va_list ap);
-void flashrom_progress_cb(struct flashrom_flashctx *flashctx);
+/* libflashrom.c */
 /* Let gcc and clang check for correct printf-style format strings. */
 int print(enum flashrom_log_level level, const char *fmt, ...)
 #ifdef __MINGW32__
@@ -712,5 +705,4 @@ struct spi_command {
 int spi_send_command(const struct flashctx *flash, unsigned int writecnt, unsigned int readcnt, const unsigned char *writearr, unsigned char *readarr);
 int spi_send_multicommand(const struct flashctx *flash, struct spi_command *cmds);
 
-enum chipbustype get_buses_supported(void);
 #endif				/* !__FLASH_H__ */
