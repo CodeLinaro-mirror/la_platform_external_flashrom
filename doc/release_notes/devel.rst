@@ -17,66 +17,37 @@ not currently supported.
 
 https://ticket.coreboot.org/issues/370
 
-Build only supported with Meson
-===============================
+flashchips.c split into separate files by vendor
+================================================
 
-As documented in the :doc:`v1.4 release notes <v_1_4>`, support for building
-flashrom with make has been removed; all Makefiles have been deleted. Meson is
-now the only supported tool for building flashrom from source.
+``flashchips.c`` file was split into separate files per vendor. flashchips.c still exists in the source
+code but it is much smaller and only contain "generic" chip entries.
 
-New Feature
-===========
+With this, instead of one file ``flashchips.c`` we now have a ``flashchips/`` directory which contains
+all the files.
 
-Libpci 3.13.0 and onwards support ECAM to access pci registers. Flashrom will
-be moved to ECAM from IO port 0xcf8/0xcfc if the libpci version is >= 3.13.0.
-The ECAM has been supported for a very long time, most platforms should support
-it. For those platforms don't support ECAM, libpci will terminate the process by
-exit.
+There are no changes to the usage, and everything that's supported stays the same.
 
-Chipset support
-===============
+New features
+============
 
-Added Raptor Point PCH support.
+-r/-w/-v argument is optional when using -i
+-------------------------------------------
 
-Chip model support added
-========================
+See :doc:`/classic_cli_manpage` for details.
 
-* FM25Q04
-* FM25Q64
-* FM25Q128
+Hall of Fame added to documentation
+-----------------------------------
 
-* GD25B128E
-* GD25B256E
-* GD25B512MF
-* GD25F64F
-* GD25F256F
-* GD25R128E
-* GD25R256E
-* GD25R512MF
-* GD25LB256F
-* GD25LB512ME
-* GD25LB512MF
-* GD25LR256F
-* GD25LR512MF
-* GD25LF256F
-* GD25LF512MF
+The flashrom HTML documentation (and web site) now includes an
+automatically-generated list of historical contributors, to acknowledge
+everybody who has made flashrom into what it is:
+:doc:`../about_flashrom/hall_of_fame`.
 
-* MX25U25645G
-* MX77U51250F
-
-* W25Q32JV_M
-
-* XM25LU64C
-* XM25QH32C
-* XM25QH32D
-* XM25QH64D
-* XM25QH128D
-* XM25QH256D
-* XM25QH512C
-* XM25QH512D
-* XM25QU16C
-* XM25QU32C
-* XM25QU128D
-* XM25QU256D
-* XM25QU512C
-* XM25QU512D
+When building the documentation, the ``generate_authors_list`` Meson option will
+cause the lists to be generated, requiring a runnable copy of Git on the system
+and that the source tree being built is a Git working copy. If those
+requirements are not satisfied or the option is disabled, the authors lists will
+be replaced with placeholders unless the ``generate_authors_list`` option is set
+to ``enabled`` in which case the build will fail if the requirements are not
+satisfied.
