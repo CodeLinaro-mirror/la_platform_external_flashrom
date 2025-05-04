@@ -56,7 +56,7 @@
 #include "spi.h"
 
 static bool g_cros_ec_detected = false;
-static int g_cros_ec_fd;		/* File descriptor for kernel device */
+static int g_cros_ec_fd = -1;		/* File descriptor for kernel device */
 
 struct cros_ec_priv {
 	enum ec_current_image current_image;
@@ -1399,6 +1399,8 @@ static struct opaque_master opaque_master_cros_ec_dev = {
 static int cros_ec_dev_shutdown(void *data)
 {
 	close(g_cros_ec_fd);
+	g_cros_ec_fd = -1;
+	g_cros_ec_detected = false;
 	return 0;
 }
 
