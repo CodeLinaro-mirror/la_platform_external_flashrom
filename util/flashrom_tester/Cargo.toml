@@ -16,14 +16,14 @@ name = "flashrom_tester"
 required-features = ["cli"]
 
 [workspace]
-members = [".", "flashrom"]
+members = [".", "flashrom_abstraction"]
 
 [dependencies]
 atty = "0.2"
 built = { version = "0.5", features = ["chrono"] }
 chrono = { version = "0.4", optional = true }
 clap = { version = "2.33", default-features = false, optional = true }
-flashrom = { path = "flashrom/" }
+flashrom_abstraction = { path = "flashrom_abstraction/" }
 libc = "0.2"
 libflashrom = { path = "../../bindings/rust/libflashrom" }
 log = { version = "0.4", features = ["std"] }

@@ -39,7 +39,7 @@ extern crate log;
 mod logger;
 
 use clap::{App, Arg};
-use flashrom::{FlashChip, Flashrom, FlashromCmd, FlashromLib};
+use flashrom_abstraction::{FlashChip, Flashrom, FlashromCmd, FlashromLib};
 use flashrom_tester::{tester, tests};
 use std::sync::atomic::AtomicBool;
 
@@ -131,9 +131,9 @@ fn main() {
         Box::new(FlashromLib::new(
             ccd_type,
             if matches.is_present("log_debug") {
-                flashrom::FLASHROM_MSG_DEBUG
+                flashrom_abstraction::FLASHROM_MSG_DEBUG
             } else {
-                flashrom::FLASHROM_MSG_WARN
+                flashrom_abstraction::FLASHROM_MSG_WARN
             },
         ))
     } else {

@@ -36,7 +36,7 @@
 use super::cros_sysinfo;
 use super::tester::{self, OutputFormat, TestCase, TestEnv, TestResult};
 use super::utils::{self, LayoutNames};
-use flashrom::{FlashChip, Flashrom};
+use flashrom_abstraction::{FlashChip, Flashrom};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::fs::{self, File};
