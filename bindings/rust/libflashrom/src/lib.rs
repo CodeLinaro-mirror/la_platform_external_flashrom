@@ -505,7 +505,6 @@ impl From<FlashromFlag> for libflashrom_sys::flashrom_flag {
             FlashromFlag::FlashromFlagSkipUnwritableRegions => {
                 libflashrom_sys::flashrom_flag::FLASHROM_FLAG_SKIP_UNWRITABLE_REGIONS
             }
-            e => panic!("Unexpected FlashromFlag: {:?}", e),
         }
     }
 }
