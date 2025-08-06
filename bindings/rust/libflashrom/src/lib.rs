@@ -1071,9 +1071,7 @@ mod tests {
         flashrom_version_info, set_log_function, set_log_level, Chip, ChipInitError, InitError,
         Layout, Programmer, WriteProtectCfg,
     };
-    use gag::BufferRedirect;
     use std::cell::RefCell;
-    use std::io::Read;
 
     /// Helper function to run test logic in a forked process.
     /// This is necessary because the flashrom C library uses global state
@@ -1202,31 +1200,6 @@ mod tests {
         });
     }
 
-    #[test]
-    fn logging_stderr() {
-        run_in_fork(|| {
-            let mut buf = BufferRedirect::stderr().unwrap();
-            let mut fc = Chip::new(
-                Programmer::new("dummy", Some("emulate=W25Q128FV")).unwrap(),
-                Some("W25Q128.V"),
-            )
-            .unwrap();
-
-            set_log_level(Some(libflashrom_sys::FLASHROM_MSG_INFO));
-            fc.image_read(None).unwrap();
-            let mut stderr = String::new();
-            if buf.read_to_string(&mut stderr).unwrap() == 0 {
-                panic!("stderr empty when it should have some messages");
-            }
-
-            set_log_level(None);
-            fc.image_read(None).unwrap();
-            if buf.read_to_string(&mut stderr).unwrap() != 0 {
-                panic!("stderr not empty when it should be silent");
-            }
-        });
-    }
-
     thread_local! {
         static TEST_BUF: RefCell<String> = RefCell::new(String::new());
     }
@@ -1260,6 +1233,45 @@ mod tests {
             assert_ne!(
                 len, 0,
                 "Custom logger was called, buffer should not be empty"
+            );
+        });
+    }
+
+    #[test]
+    fn logging_log_level() {
+        run_in_fork(|| {
+            // Ensure the buffer is in a known empty state
+            TEST_BUF.with(|buf| {
+                buf.borrow_mut().clear();
+                assert_eq!(
+                    buf.borrow().len(),
+                    0,
+                    "Buffer should be empty at the start of the test"
+                );
+            });
+            let mut fc = Chip::new(
+                Programmer::new("dummy", Some("emulate=W25Q128FV")).unwrap(),
+                Some("W25Q128.V"),
+            )
+            .unwrap();
+
+            set_log_function(test_logger);
+            set_log_level(Some(libflashrom_sys::FLASHROM_MSG_INFO));
+            fc.image_read(None).unwrap();
+            assert_ne!(
+                TEST_BUF.with(|buf| buf.borrow().len()),
+                0,
+                "Buffer should not be empty under log level: info"
+            );
+
+            TEST_BUF.with(|buf| buf.borrow_mut().clear());
+
+            set_log_level(None);
+            fc.image_read(None).unwrap();
+            assert_eq!(
+                TEST_BUF.with(|buf| buf.borrow().len()),
+                0,
+                "Buffer should be empty under log level: none"
             );
         });
     }
