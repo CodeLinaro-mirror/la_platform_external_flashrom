@@ -22,7 +22,7 @@ members = [".", "flashrom_abstraction"]
 atty = "0.2"
 built = { version = "0.5", features = ["chrono"], optional = true }
 chrono = { version = "0.4", optional = true }
-clap = { version = "2.33", default-features = false, optional = true }
+clap = { version = "4.5", optional = true }
 flashrom_abstraction = { path = "flashrom_abstraction/" }
 libc = "0.2"
 libflashrom = { path = "../../bindings/rust/libflashrom" }

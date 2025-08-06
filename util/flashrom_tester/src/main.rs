@@ -38,7 +38,7 @@ extern crate log;
 
 mod logger;
 
-use clap::{App, Arg};
+use clap::{Arg, ArgAction, Command};
 use flashrom_abstraction::{FlashChip, Flashrom, FlashromCmd, FlashromLib};
 use flashrom_tester::{tester, tests};
 use std::sync::atomic::AtomicBool;
@@ -48,72 +48,73 @@ pub mod built_info {
 }
 
 fn main() {
-    let matches = App::new("flashrom_tester")
-        .long_version(&*format!(
-            "{}-{}\n\
-             Target: {}\n\
-             Profile: {}\n\
-             Features: {:?}\n\
-             Build time: {}\n\
-             Compiler: {}",
-            built_info::PKG_VERSION,
-            option_env!("VCSID").unwrap_or("<unknown>"),
-            built_info::TARGET,
-            built_info::PROFILE,
-            built_info::FEATURES,
-            built_info::BUILT_TIME_UTC,
-            built_info::RUSTC_VERSION,
-        ))
+    let version = format!(
+        "{}-{}\n\
+         Target: {}\n\
+         Profile: {}\n\
+         Features: {:?}\n\
+         Build time: {}\n\
+         Compiler: {}",
+        built_info::PKG_VERSION,
+        option_env!("VCSID").unwrap_or("<unknown>"),
+        built_info::TARGET,
+        built_info::PROFILE,
+        built_info::FEATURES,
+        built_info::BUILT_TIME_UTC,
+        built_info::RUSTC_VERSION,
+    );
+    let matches = Command::new("flashrom_tester")
+        .long_version(&*Box::leak(version.into_boxed_str()))
         .arg(
-            Arg::with_name("libflashrom")
+            Arg::new("libflashrom")
                 .long("libflashrom")
-                .takes_value(false)
+                .action(ArgAction::SetTrue)
                 .help("Test the flashrom library instead of a binary"),
         )
         .arg(
-            Arg::with_name("flashrom_binary")
+            Arg::new("flashrom_binary")
                 .long("flashrom_binary")
-                .short("b")
-                .takes_value(true)
-                .required_unless("libflashrom")
+                .short('b')
+                .required_unless_present("libflashrom")
                 .conflicts_with("libflashrom")
                 .help("Path to flashrom binary to test"),
         )
         .arg(
-            Arg::with_name("ccd_target_type")
+            Arg::new("ccd_target_type")
                 .required(true)
-                .possible_values(&["internal"]),
+                .value_parser(["internal"]),
         )
         .arg(
-            Arg::with_name("print-layout")
-                .short("l")
+            Arg::new("print-layout")
+                .short('l')
                 .long("print-layout")
+                .action(ArgAction::SetTrue)
                 .help("Print the layout file's contents before running tests"),
         )
         .arg(
-            Arg::with_name("log_debug")
-                .short("d")
+            Arg::new("log_debug")
+                .short('d')
                 .long("debug")
+                .action(ArgAction::SetTrue)
                 .help("Write detailed logs, for debugging"),
         )
         .arg(
-            Arg::with_name("output-format")
-                .short("f")
+            Arg::new("output-format")
+                .short('f')
                 .long("output-format")
                 .help("Set the test report format")
-                .takes_value(true)
-                .case_insensitive(true)
-                .possible_values(&["pretty", "json"])
+                .ignore_case(true)
+                .value_parser(["pretty", "json"])
                 .default_value("pretty"),
         )
         .arg(
-            Arg::with_name("test_name")
-                .multiple(true)
+            Arg::new("test_name")
+                .num_args(1..)
                 .help("Names of individual tests to run (run all if unspecified)"),
         )
         .get_matches();
 
-    logger::init(matches.is_present("log_debug"));
+    logger::init(matches.get_flag("log_debug"));
     debug!("Args parsed and logging initialized OK");
 
     debug!("Collecting crossystem info");
@@ -122,15 +123,16 @@ fn main() {
 
     let ccd_type = FlashChip::from(
         matches
-            .value_of("ccd_target_type")
-            .expect("ccd_target_type should be required"),
+            .get_one::<String>("ccd_target_type")
+            .expect("ccd_target_type should be required")
+            .as_str(),
     )
     .expect("ccd_target_type should admit only known types");
 
-    let cmd: Box<dyn Flashrom> = if matches.is_present("libflashrom") {
+    let cmd: Box<dyn Flashrom> = if matches.get_flag("libflashrom") {
         Box::new(FlashromLib::new(
             ccd_type,
-            if matches.is_present("log_debug") {
+            if matches.get_flag("log_debug") {
                 flashrom_abstraction::FLASHROM_MSG_DEBUG
             } else {
                 flashrom_abstraction::FLASHROM_MSG_WARN
@@ -139,20 +141,22 @@ fn main() {
     } else {
         Box::new(FlashromCmd {
             path: matches
-                .value_of("flashrom_binary")
+                .get_one::<String>("flashrom_binary")
                 .expect("flashrom_binary is required")
                 .to_string(),
             fc: ccd_type,
         })
     };
 
-    let print_layout = matches.is_present("print-layout");
+    let print_layout = matches.get_flag("print-layout");
     let output_format = matches
-        .value_of("output-format")
+        .get_one::<String>("output-format")
         .expect("output-format should have a default value")
         .parse::<tester::OutputFormat>()
         .expect("output-format is not a parseable OutputFormat");
-    let test_names = matches.values_of("test_name");
+    let test_names = matches
+        .get_many::<String>("test_name")
+        .map(|v| v.map(|s| s.as_str()));
 
     if let Err(e) = tests::generic(
         cmd.as_ref(),
