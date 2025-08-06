@@ -33,13 +33,20 @@
 // Software Foundation.
 //
 
+#[cfg(feature = "chromeos-host")]
 use super::cros_sysinfo;
 use super::tester::{self, OutputFormat, TestCase, TestEnv, TestResult};
 use super::utils::{self, LayoutNames};
 use flashrom_abstraction::{FlashChip, Flashrom};
-use std::collections::{HashMap, HashSet};
+#[cfg(feature = "chromeos-host")]
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::convert::TryInto;
+#[cfg(feature = "chromeos-host")]
 use std::fs::{self, File};
+#[cfg(not(feature = "chromeos-host"))]
+use std::fs::{self};
+#[cfg(feature = "chromeos-host")]
 use std::io::BufRead;
 use std::sync::atomic::AtomicBool;
 
@@ -97,6 +104,7 @@ pub fn generic<'a, TN: Iterator<Item = &'a str>>(
     let tests: &[&dyn TestCase] = &[
         &("Get_device_name", get_device_name_test),
         &("Coreboot_ELOG_sanity", elog_sanity_test),
+        #[cfg(feature = "chromeos-host")]
         &("Host_is_ChromeOS", host_is_chrome_test),
         &("WP_Region_List", wp_region_list_test),
         &("Erase_and_Write", erase_write_test),
@@ -134,11 +142,22 @@ pub fn generic<'a, TN: Iterator<Item = &'a str>>(
         warn!("No test matches filter name \"{}\"", leftover);
     }
 
-    let os_release = sys_info::os_release().unwrap_or("<Unknown OS>".to_string());
-    let cros_release = cros_sysinfo::release_description()
-        .unwrap_or("<Unknown or not a ChromeOS release>".to_string());
-    let system_info = cros_sysinfo::system_info().unwrap_or("<Unknown System>".to_string());
-    let bios_info = cros_sysinfo::bios_info().unwrap_or("<Unknown BIOS>".to_string());
+    #[cfg(feature = "chromeos-host")]
+    let (os_release, cros_release, system_info, bios_info) = {
+        let os_release = sys_info::os_release().unwrap_or("<Unknown OS>".to_string());
+        let cros_release = cros_sysinfo::release_description()
+            .unwrap_or("<Unknown or not a ChromeOS release>".to_string());
+        let system_info = cros_sysinfo::system_info().unwrap_or("<Unknown System>".to_string());
+        let bios_info = cros_sysinfo::bios_info().unwrap_or("<Unknown BIOS>".to_string());
+        (os_release, cros_release, system_info, bios_info)
+    };
+    #[cfg(not(feature = "chromeos-host"))]
+    let (os_release, cros_release, system_info, bios_info) = (
+        "<Unknown OS>".to_string(),
+        "<Unknown or not a ChromeOS release>".to_string(),
+        "<Unknown System>".to_string(),
+        "<Unknown BIOS>".to_string(),
+    );
 
     let meta_data = tester::ReportMetaData {
         chip_name,
@@ -243,6 +262,7 @@ fn elog_sanity_test(env: &mut TestEnv) -> TestResult {
 }
 
 /// Check that we are running ChromiumOS.
+#[cfg(feature = "chromeos-host")]
 fn host_is_chrome_test(_env: &mut TestEnv) -> TestResult {
     let release_info = if let Ok(f) = File::open("/etc/os-release") {
         let buf = std::io::BufReader::new(f);
@@ -331,6 +351,7 @@ fn verify_fail_test(env: &mut TestEnv) -> TestResult {
 
 /// Ad-hoc parsing of os-release(5); mostly according to the spec,
 /// but ignores quotes and escaping.
+#[cfg(feature = "chromeos-host")]
 fn parse_os_release<I: IntoIterator<Item = String>>(lines: I) -> HashMap<String, String> {
     fn parse_line(line: String) -> Option<(String, String)> {
         if line.is_empty() || line.starts_with('#') {
@@ -353,6 +374,7 @@ fn parse_os_release<I: IntoIterator<Item = String>>(lines: I) -> HashMap<String,
     lines.into_iter().filter_map(parse_line).collect()
 }
 
+#[cfg(feature = "chromeos-host")]
 #[test]
 fn test_parse_os_release() {
     let lines = [
