@@ -18,6 +18,7 @@ project('ap_wpsr', 'c')
 
 libsrc = [
   '../../flashchips.c',
+  '../../flashchips_crosbl.c',
   '../../writeprotect.c',
   '../../writeprotect_ranges.c',
   'shim/flashrom_shim.c',

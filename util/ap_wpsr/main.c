@@ -27,12 +27,75 @@
 #include "writeprotect.h"
 
 
-static const struct flashchip *find_chip(const char *name)
+static const struct flashchip *find_chip_by_name(const char *name)
 {
 	for (const struct flashchip *chip = flashchips; chip && chip->name; chip++)
 		if (!strcmp(chip->name, name))
 			return chip;
 	return NULL;
+}
+
+static const struct flashchip *find_chip_by_jedec_id(unsigned long long jedec_id)
+{
+	const struct flashchip *found_chip = NULL;
+	int match_count = 0;
+	uint8_t manufacture_id;
+	uint16_t model_id;
+
+	/*
+	 * JEDEC ID is read as a sequence of bytes. It may be preceded by
+	 * continuation codes (0x7F). This function parses a 64-bit integer
+	 * representation of the ID to find the components.
+	 */
+	uint8_t jedec_bytes[8];
+	for (int i = 0; i < ARRAY_SIZE(jedec_bytes); i++)
+		jedec_bytes[i] = (jedec_id >> (56 - i * 8)) & 0xff;
+
+	/*
+	 * Find the first non-zero byte to locate the start of the ID, as the
+	 * jedec_id from the command line might be shorter than 8 bytes.
+	 */
+	int first_byte_idx = 0;
+	while (first_byte_idx < ARRAY_SIZE(jedec_bytes) && jedec_bytes[first_byte_idx] == 0)
+		first_byte_idx++;
+
+	if (first_byte_idx == ARRAY_SIZE(jedec_bytes))
+		return NULL;  /* ID is all zeros. */
+
+	/* Skip continuation codes (0x7F) to find the manufacturer ID. */
+	int id_start_idx = first_byte_idx;
+	while (id_start_idx < ARRAY_SIZE(jedec_bytes) && jedec_bytes[id_start_idx] == 0x7F)
+		id_start_idx++;
+
+	/* We need at least 3 bytes for a valid ID (1 for manufacturer, 2 for model). */
+	if (ARRAY_SIZE(jedec_bytes) - id_start_idx < 3)
+		return NULL;
+
+	/* The first non-0x7F byte is the manufacturer ID. */
+	manufacture_id = jedec_bytes[id_start_idx];
+	/* The next two bytes are the model ID. */
+	model_id = (jedec_bytes[id_start_idx + 1] << 8) | jedec_bytes[id_start_idx + 2];
+
+	/*
+	 * The Extended Device ID bytes that may follow the model ID are currently
+	 * ignored for the purpose of finding a chip match.
+	 */
+	for (const struct flashchip *chip = flashchips; chip && chip->name; chip++) {
+		if (chip->manufacture_id == manufacture_id && chip->model_id == model_id) {
+			if (is_chipname_duplicate(chip))
+				continue;
+			found_chip = chip;
+			match_count++;
+		}
+	}
+
+	if (match_count > 1) {
+		fprintf(stderr, "Error: Multiple non-duplicate chips found for JEDEC ID 0x%llx\n",
+			jedec_id);
+		return NULL;
+	}
+
+	return found_chip;
 }
 
 static const char *get_wp_error_str(int err)
@@ -121,18 +184,12 @@ void print_register_state(uint8_t *reg_values, uint8_t *wp_bit_masks)
 	printf("\n");
 }
 
-enum flashrom_wp_result print_wp_regmasks(const char *name, uint32_t wp_start, uint32_t wp_len)
+enum flashrom_wp_result print_wp_regmasks(const struct flashchip *chip, uint32_t wp_start, uint32_t wp_len)
 {
 	struct registered_master r_mst = {0};
 	struct flashctx flash = { .mst = &r_mst };
 
-	flash.chip = (struct flashchip *) find_chip(name);
-	if (flash.chip)
-		printf(" > found match '%s' in chip db.\n\n", flash.chip->name);
-	else {
-		fprintf(stderr, " no match found for '%s' in chip db.\n", name);
-		exit(1);
-	}
+	flash.chip = (struct flashchip *)chip;
 
 	chip_4ba_feature_decode(flash.chip->feature_bits);
 
@@ -167,8 +224,9 @@ void print_help(int argc, char* argv[])
 {
 	fprintf(stderr, "Usage: %s [OPTIONS]\n\n"
 		        "Required arguments:\n"
-			"  -n, --name=name      Name of chip to \n"
-			"                       calculate SR values for\n"
+			"  One of the following must be specified:\n"
+			"    -n, --name=name      Name of chip to calculate SR values for\n"
+			"    -j, --jedec_id=id    JEDEC ID of chip to calculate SR values for\n"
 			"  -s, --start=addr     Start address of protection range\n"
 			"  -l, --length=addr    Length of protection range\n\n"
 			"Optional arguments:\n"
@@ -179,13 +237,15 @@ void print_help(int argc, char* argv[])
 int main(int argc, char* argv[])
 {
 	char *name = NULL;
+	unsigned long long jedec_id = 0;
 	uint32_t wp_start = 0, wp_len = 0; /* default */
 	bool wp_start_set = false, wp_len_set = false;
 
-	static const char optstr[] = "hn:s:l:";
+	static const char optstr[] = "hn:s:l:j:";
 	static const struct option long_options[] = {
 		{"help",		0, NULL, 'h'},
 		{"name",		1, NULL, 'n'},
+		{"jedec_id",		1, NULL, 'j'},
 		{"start",		1, NULL, 's'},
 		{"length",		1, NULL, 'l'},
 		{NULL,			0, NULL, 0},
@@ -195,6 +255,13 @@ int main(int argc, char* argv[])
 		switch (opt) {
 			case 'n':
 				name = optarg;
+				break;
+			case 'j':
+				jedec_id = strtoull(optarg, NULL, 0);
+				if (jedec_id == 0) {
+					fprintf(stderr, "Error: invalid JEDEC ID '0x0'.\n");
+					return 1;
+				}
 				break;
 			case 's':
 				wp_start = strtoul(optarg, NULL, 0);
@@ -211,8 +278,8 @@ int main(int argc, char* argv[])
 		}
 	}
 
-	if (!name) {
-		fprintf(stderr, "Error: --name <chip name> must be provided\n");
+	if (!!name == !!jedec_id) {
+		fprintf(stderr, "Error: Exactly one of --name or --jedec_id must be provided\n");
 		return 1;
 	}
 
@@ -226,9 +293,28 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
-	printf(" > requested chip name: '%s' with start: 0x%x and len: 0x%x.\n", name, wp_start, wp_len);
+	const struct flashchip *chip = NULL;
+	if (name) {
+		printf(" > requested chip name: '%s' with start: 0x%x and len: 0x%x.\n", name, wp_start, wp_len);
+		chip = find_chip_by_name(name);
+		if (!chip) {
+			fprintf(stderr, " no match found for '%s' in chip db.\n", name);
+			return 1;
+		}
+		printf(" > found match '%s' in chip db. (Manufacture: 0x%02x, Model: 0x%04x)\n\n",
+		       chip->name, chip->manufacture_id, chip->model_id);
+	} else {
+		printf(" > requested jedec id: 0x%llx with start: 0x%x and len: 0x%x.\n", jedec_id, wp_start, wp_len);
+		chip = find_chip_by_jedec_id(jedec_id);
+		if (!chip) {
+			fprintf(stderr, " no match found for jedec id 0x%llx in chip db.\n", jedec_id);
+			return 1;
+		}
+		printf(" > found match for JEDEC ID 0x%llx: '%s' in chip db. (Manufacture: 0x%02x, Model: 0x%04x)\n\n",
+		       jedec_id, chip->name, chip->manufacture_id, chip->model_id);
+	}
 
-	enum flashrom_wp_result ret = print_wp_regmasks(name, wp_start, wp_len);
+	enum flashrom_wp_result ret = print_wp_regmasks(chip, wp_start, wp_len);
 	if (ret != FLASHROM_WP_OK) {
 		fprintf(stderr, "Error: '%s'\n", get_wp_error_str(ret));
 		return 1;
