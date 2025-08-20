@@ -76,5 +76,12 @@ bool is_chipname_duplicate(const struct flashchip *chip)
 	 */
 	if(!strcmp(chip->name, "GD25LB256F/GD25LR256F")) return true;
 
+	/* FIXME(b/412502949): Felino Proto 0.
+	 * The "MX77U51250F" and "MX77U51250F_32" and chip entries
+	 * have the same vendor and model IDs.
+	 * Marking the latter as duplicate.
+	 */
+	if(!strcmp(chip->name, "MX77U51250F")) return true;
+
 	return false;
 }

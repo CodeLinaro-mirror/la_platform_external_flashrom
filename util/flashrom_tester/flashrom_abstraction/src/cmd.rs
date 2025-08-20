@@ -298,7 +298,7 @@ impl crate::Flashrom for FlashromCmd {
         self.fc.can_control_hw_wp()
     }
 
-    fn set_flags(&self, flags: &FlashromFlags) -> () {
+    fn set_flags(&self, _flags: &FlashromFlags) -> () {
         // The flashrom CLI sets its own default flags,
         // and we currently have no need for custom flags,
         // so this set_flags function is intentionally a no-op.
