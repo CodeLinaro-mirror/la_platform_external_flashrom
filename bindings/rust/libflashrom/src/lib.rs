@@ -505,7 +505,6 @@ impl From<FlashromFlag> for libflashrom_sys::flashrom_flag {
             FlashromFlag::FlashromFlagSkipUnwritableRegions => {
                 libflashrom_sys::flashrom_flag::FLASHROM_FLAG_SKIP_UNWRITABLE_REGIONS
             }
-            e => panic!("Unexpected FlashromFlag: {:?}", e),
         }
     }
 }
@@ -1068,108 +1067,224 @@ impl Drop for Layout {
 
 #[cfg(test)]
 mod tests {
-    use gag::BufferRedirect;
-    use std::io::Read;
+    use super::{
+        flashrom_version_info, set_log_function, set_log_level, Chip, ChipInitError, InitError,
+        Layout, Programmer, WriteProtectCfg,
+    };
+    use std::cell::RefCell;
 
-    use super::flashrom_version_info;
-    use super::set_log_level;
-    use super::Chip;
-    use super::ChipInitError;
-    use super::InitError;
-    use crate::set_log_function;
-    use crate::Layout;
-    use crate::Programmer;
-    use crate::WriteProtectCfg;
+    /// Helper function to run test logic in a forked process.
+    /// This is necessary because the flashrom C library uses global state
+    /// that prevents tests from running sequentially in the same process.
+    fn run_in_fork<F>(test_fn: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        use nix::errno::Errno;
+        use nix::fcntl::{fcntl, FcntlArg, OFlag};
+        use nix::sys::wait::{waitpid, WaitStatus};
+        use nix::unistd::{fork, pipe, read, write, ForkResult};
+        use std::os::fd::{AsFd, AsRawFd};
+        use std::panic;
 
-    // flashrom contains global state, which prevents correct initialisation of
-    // a second programmer or probing of a second chip. Run all unit tests in
-    // forked subprocesses to avoid this issue.
-    use rusty_fork::rusty_fork_test;
-    rusty_fork_test! {
+        let (read_fd, write_fd) = pipe().expect("pipe failed");
 
-        #[test]
-        fn version() {
+        match unsafe { fork() } {
+            Ok(ForkResult::Parent { child, .. }) => {
+                drop(write_fd);
+
+                let flags =
+                    fcntl(read_fd.as_raw_fd(), FcntlArg::F_GETFL).expect("Failed to get flags");
+                let mut non_blocking_flags = OFlag::from_bits_truncate(flags);
+                non_blocking_flags.insert(OFlag::O_NONBLOCK);
+                fcntl(read_fd.as_raw_fd(), FcntlArg::F_SETFL(non_blocking_flags))
+                    .expect("Failed to set non-blocking");
+
+                let status = waitpid(child, None).expect("waitpid failed");
+
+                if let WaitStatus::Exited(_, 101) = status {
+                    let mut buf = [0; 4096];
+                    match read(read_fd.as_raw_fd(), &mut buf) {
+                        Ok(bytes_read) if bytes_read > 0 => {
+                            let panic_message = String::from_utf8_lossy(&buf[..bytes_read]);
+                            panic!(
+                                "Test panicked in child process:\n---\n{}\n---",
+                                panic_message
+                            );
+                        }
+                        Ok(_) | Err(Errno::EWOULDBLOCK) => {
+                            panic!("Test child exited with panic code 101 but sent no message.");
+                        }
+                        Err(e) => {
+                            panic!("Failed to read from pipe after child panic: {}", e);
+                        }
+                    }
+                }
+            }
+            Ok(ForkResult::Child) => {
+                panic::set_hook(Box::new(move |panic_info| {
+                    let msg = format!("{}", panic_info);
+                    let _ = write(write_fd.as_fd(), msg.as_bytes());
+                    std::process::exit(101);
+                }));
+
+                test_fn();
+            }
+            Err(e) => panic!("Fork failed: {}", e),
+        }
+    }
+
+    #[test]
+    fn version() {
+        run_in_fork(|| {
             // There is no version requirement yet, but for example:
             // assert!(flashrom_version_info().contains("v1.2"))
-            assert!(!flashrom_version_info().unwrap().is_empty())
-        }
+            assert!(!flashrom_version_info().unwrap().is_empty());
+        });
+    }
 
-        #[test]
-        fn only_one_programmer() {
-            {
-                let _1 = Programmer::new("dummy", Some("emulate=W25Q128FV")).unwrap();
-                // Only one programmer can be initialised at a time.
-                assert_eq!(Programmer::new("dummy", Some("emulate=W25Q128FV")).unwrap_err(), InitError::DuplicateInit)
-            }
-            // Only one programmer can ever be initialised
-            assert_eq!(Programmer::new("dummy", Some("emulate=W25Q128FV")).unwrap_err(), InitError::DuplicateInit)
-        }
+    #[test]
+    fn only_one_programmer() {
+        run_in_fork(|| {
+            let _1 = Programmer::new("dummy", Some("emulate=W25Q128FV")).unwrap();
+            // Only one programmer can be initialised at a time.
+            assert_eq!(
+                Programmer::new("dummy", Some("emulate=W25Q128FV")).unwrap_err(),
+                InitError::DuplicateInit
+            );
+        });
+    }
 
-        #[test]
-        fn programmer_bad_cstring_name() {
-            assert!(matches!(Programmer::new("dummy\0", None).unwrap_err(), InitError::InvalidName(_)))
-        }
+    #[test]
+    fn programmer_bad_cstring_name() {
+        run_in_fork(|| {
+            assert!(matches!(
+                Programmer::new("dummy\0", None).unwrap_err(),
+                InitError::InvalidName(_)
+            ));
+        });
+    }
 
-        #[test]
-        fn chip_none() {
+    #[test]
+    fn chip_none() {
+        run_in_fork(|| {
             // Not specifying a chip will select one if there is one.
-            Chip::new(Programmer::new("dummy", Some("emulate=W25Q128FV")).unwrap(), None).unwrap();
-        }
+            Chip::new(
+                Programmer::new("dummy", Some("emulate=W25Q128FV")).unwrap(),
+                None,
+            )
+            .unwrap();
+        });
+    }
 
-        #[test]
-        fn chip_some() {
+    #[test]
+    fn chip_some() {
+        run_in_fork(|| {
             // Specifying a valid chip.
-            Chip::new(Programmer::new("dummy", Some("emulate=W25Q128FV")).unwrap(), Some("W25Q128.V")).unwrap();
-        }
+            Chip::new(
+                Programmer::new("dummy", Some("emulate=W25Q128FV")).unwrap(),
+                Some("W25Q128.V"),
+            )
+            .unwrap();
+        });
+    }
 
-        #[test]
-        fn chip_nochip() {
+    #[test]
+    fn chip_nochip() {
+        run_in_fork(|| {
             // Choosing a non existent chip fails.
             assert_eq!(
                 Chip::new(Programmer::new("dummy", None).unwrap(), Some("W25Q128.V")).unwrap_err(),
                 ChipInitError::NoChipError
             );
-        }
+        });
+    }
 
-        #[test]
-        fn logging_stderr() {
-            let mut buf = BufferRedirect::stderr().unwrap();
-            let mut fc = Chip::new(Programmer::new("dummy", Some("emulate=W25Q128FV")).unwrap(), Some("W25Q128.V")).unwrap();
+    thread_local! {
+        static TEST_BUF: RefCell<String> = RefCell::new(String::new());
+    }
 
+    // A safe logger for testing that uses thread-local storage.
+    fn test_logger(_: libflashrom_sys::flashrom_log_level, format: &str) {
+        TEST_BUF.with(|buf| buf.borrow_mut().push_str(format));
+    }
+
+    #[test]
+    fn logging_custom() {
+        run_in_fork(|| {
+            // Ensure the buffer is in a known empty state
+            TEST_BUF.with(|buf| {
+                buf.borrow_mut().clear();
+                assert_eq!(
+                    buf.borrow().len(),
+                    0,
+                    "Buffer should be empty at the start of the test"
+                );
+            });
+            // Check that a custom logging callback works
+            set_log_function(test_logger);
+            set_log_level(Some(libflashrom_sys::FLASHROM_MSG_SPEW));
+            Chip::new(
+                Programmer::new("dummy", Some("emulate=W25Q128FV")).unwrap(),
+                Some("W25Q128.V"),
+            )
+            .unwrap();
+            let len = TEST_BUF.with(|buf| buf.borrow().len());
+            assert_ne!(
+                len, 0,
+                "Custom logger was called, buffer should not be empty"
+            );
+        });
+    }
+
+    #[test]
+    fn logging_log_level() {
+        run_in_fork(|| {
+            // Ensure the buffer is in a known empty state
+            TEST_BUF.with(|buf| {
+                buf.borrow_mut().clear();
+                assert_eq!(
+                    buf.borrow().len(),
+                    0,
+                    "Buffer should be empty at the start of the test"
+                );
+            });
+            let mut fc = Chip::new(
+                Programmer::new("dummy", Some("emulate=W25Q128FV")).unwrap(),
+                Some("W25Q128.V"),
+            )
+            .unwrap();
+
+            set_log_function(test_logger);
             set_log_level(Some(libflashrom_sys::FLASHROM_MSG_INFO));
             fc.image_read(None).unwrap();
-            let mut stderr = String::new();
-            if buf.read_to_string(&mut stderr).unwrap() == 0 {
-                panic!("stderr empty when it should have some messages");
-            }
+            assert_ne!(
+                TEST_BUF.with(|buf| buf.borrow().len()),
+                0,
+                "Buffer should not be empty under log level: info"
+            );
+
+            TEST_BUF.with(|buf| buf.borrow_mut().clear());
 
             set_log_level(None);
             fc.image_read(None).unwrap();
-            if buf.read_to_string(&mut stderr).unwrap() != 0 {
-                panic!("stderr not empty when it should be silent");
-            }
-        }
+            assert_eq!(
+                TEST_BUF.with(|buf| buf.borrow().len()),
+                0,
+                "Buffer should be empty under log level: none"
+            );
+        });
+    }
 
-        #[test]
-        fn logging_custom() {
-            // Check that a custom logging callback works
-            static mut BUF: String = String::new();
-            fn logger(
-                _: libflashrom_sys::flashrom_log_level,
-                format: &str,
-            ) {
-                unsafe {BUF.push_str(format)}
-            }
-            set_log_function(logger);
-            set_log_level(Some(libflashrom_sys::FLASHROM_MSG_SPEW));
-            Chip::new(Programmer::new("dummy", Some("emulate=W25Q128FV")).unwrap(), Some("W25Q128.V")).unwrap();
-            assert_ne!(unsafe{BUF.len()}, 0);
-        }
-
-        #[test]
-        fn flashchip() {
+    #[test]
+    fn flashchip() {
+        run_in_fork(|| {
             // basic tests of the flashchip methods
-            let mut fc = Chip::new(Programmer::new("dummy", Some("emulate=W25Q128FV")).unwrap(), Some("W25Q128.V")).unwrap();
+            let mut fc = Chip::new(
+                Programmer::new("dummy", Some("emulate=W25Q128FV")).unwrap(),
+                Some("W25Q128.V"),
+            )
+            .unwrap();
             fc.get_size();
 
             let mut wp = fc.get_wp().unwrap();
@@ -1196,15 +1311,20 @@ mod tests {
             fc.image_verify(&buf, Some(test_layout())).unwrap();
 
             fc.erase().unwrap();
-        }
+        });
+    }
 
-        #[test]
-        fn write_protect() {
+    #[test]
+    fn write_protect() {
+        run_in_fork(|| {
             let mut wp = WriteProtectCfg::new().unwrap();
             wp.set_mode(libflashrom_sys::flashrom_wp_mode::FLASHROM_WP_MODE_DISABLED);
             wp.set_range(100..200);
-            assert_eq!(wp.get_mode(), libflashrom_sys::flashrom_wp_mode::FLASHROM_WP_MODE_DISABLED);
+            assert_eq!(
+                wp.get_mode(),
+                libflashrom_sys::flashrom_wp_mode::FLASHROM_WP_MODE_DISABLED
+            );
             assert_eq!(wp.get_range(), 100..200);
-        }
+        });
     }
 }

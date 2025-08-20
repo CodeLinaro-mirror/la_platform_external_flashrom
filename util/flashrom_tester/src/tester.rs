@@ -36,8 +36,8 @@
 use super::rand_util;
 use super::types;
 use super::utils::{self, LayoutSizes};
-use flashrom::FlashromError;
-use flashrom::{FlashChip, Flashrom};
+use flashrom_abstraction::FlashromError;
+use flashrom_abstraction::{FlashChip, Flashrom};
 use libflashrom::FlashromFlags;
 use serde_json::json;
 use std::fs::File;
