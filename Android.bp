@@ -276,3 +276,14 @@ cc_binary {
 
     shared_libs: ["libflashrom"],
 }
+
+filegroup {
+    name: "libap_wpsr_srcs",
+    visibility: [":__subpackages__"],
+    srcs: [
+        "flashchips.c",
+        "flashchips_crosbl.c",
+        "writeprotect.c",
+        "writeprotect_ranges.c",
+    ],
+}
