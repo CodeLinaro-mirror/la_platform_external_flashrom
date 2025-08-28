@@ -2693,12 +2693,14 @@ int flashrom_image_write(struct flashctx *const flashctx, void *const buffer, co
 	if (tmp < 0) {
 		// Jump failed
 		msg_cerr("cros_ec_need_2nd_pass() failed. Stop.\n");
+		ret = 1;
 		emergency_help_message();
 		goto _finalize_ret;
 	} else if (tmp > 0) {
 		// Need 2nd pass. Get the just written content.
 		msg_pdbg("CROS_EC needs 2nd pass.\n");
 		if (setup_curcontents(flashctx, curcontents, NULL)) {
+			ret = 1;
 			emergency_help_message();
 			goto _finalize_ret;
 		}
