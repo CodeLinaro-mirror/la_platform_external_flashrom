@@ -8,14 +8,14 @@ third_party {
   license_type: RESTRICTED
   last_upgrade_date {
     year: 2025
-    month: 4
-    day: 18
+    month: 8
+    day: 15
   }
   homepage: "https://flashrom.org/"
   identifier {
     type: "Git"
     value: "https://chromium.googlesource.com/chromiumos/third_party/flashrom/"
-    version: "985517d86908aedfb5791d3b084b498e56f491dd"
+    version: "50ec131cad0e57078245f464d13bb24046052718"
     primary_source: true
   }
 }
