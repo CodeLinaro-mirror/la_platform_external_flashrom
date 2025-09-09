@@ -18,7 +18,7 @@ license {
 
 genrule {
     name: "flashrom_version.h",
-    visibility: ["//external/flashrom/bindings/rust/libflashrom"],
+    visibility: ["//visibility:private"],
     srcs: ["VERSION"],
     cmd: "cat $(in) | xargs printf -- '#define FLASHROM_VERSION \"%s\"\n' > $(out)",
     out: ["flashrom_version.h"],
@@ -95,11 +95,7 @@ cc_library {
     defaults: ["flashrom_defaults"],
     host_supported: true,
     vendor_available: true,
-    visibility: [
-        "//external/vboot_reference",
-        "//external/flashrom/bindings/rust/libflashrom",
-        "//external/flashrom/bindings/rust/libflashrom-sys",
-    ],
+    visibility: ["//external/vboot_reference"],
     init_rc: ["flashrom.rc"],
 
     target: {
@@ -260,6 +256,7 @@ cc_library {
         "platform/endian_little.c",
         "platform/memaccess.c",
     ],
+
     export_include_dirs: ["include"],
     static_libs: ["libz"],
 
