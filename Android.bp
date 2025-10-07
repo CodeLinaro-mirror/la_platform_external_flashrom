@@ -34,6 +34,7 @@ cc_defaults {
         "-Wshadow",
         "-Wmissing-prototypes",
         "-Wwrite-strings",
+        "-Wno-gnu-pointer-arith",
         "-Wno-unused-parameter",
         "-Wno-address-of-packed-member",
         "-Wno-enum-conversion",
