@@ -95,6 +95,7 @@ cc_library {
     defaults: ["flashrom_defaults"],
     host_supported: true,
     vendor_available: true,
+    recovery_available: true,
     visibility: [
         "//external/vboot_reference",
         "//external/flashrom/bindings/rust/libflashrom",
