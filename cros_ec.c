@@ -453,6 +453,7 @@ static int cros_ec_jump_copy(enum ec_current_image target)
 			p.cmd = EC_REBOOT_JUMP_RW;
 			target = EC_IMAGE_RW;
 		} else {
+			msg_perr("Unable to determine target EC for an unspecified jump.\n");
 			return 1;
 		}
 		break;
@@ -578,12 +579,17 @@ static int disable_soft_wp_if_needed(struct flashctx *flash)
 	return 0;
 }
 
-static void parse_fmap(const uint8_t *const image, uint32_t flash_size)
+static void parse_fmap(struct flashctx *flash, const uint8_t *const image,
+		       uint32_t flash_size)
 {
 	// Parse the fmap in the image file and cache the firmware ranges.
 	struct fmap *fmap = NULL;
 	if (fmap_read_from_buffer(&fmap, image, flash_size)) {
-		return;
+		msg_pdbg("Unable to find fmap in img, try again in ROM.\n");
+		if (fmap_read_from_rom(&fmap, flash, 0, flash_size)) {
+			msg_pdbg("Unable to find fmap in ROM either, return.\n");
+			return;
+		}
 	}
 
 	// Lookup RO/A/B sections in FMAP.
@@ -646,7 +652,7 @@ int cros_ec_prepare(struct flashctx *flash, const uint8_t *const image, uint32_t
 	if (disable_soft_wp_if_needed(flash))
 		return 1;
 
-	parse_fmap(image, flash_size);
+	parse_fmap(flash, image, flash_size);
 	/* check layout to determine what sysjumps we are required to do. */
 	const struct flashrom_layout *const layout = get_layout(flash);
 	const enum ec_current_image region_typ = parse_layout(layout);

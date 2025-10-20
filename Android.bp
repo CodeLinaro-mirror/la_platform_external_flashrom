@@ -18,7 +18,7 @@ license {
 
 genrule {
     name: "flashrom_version.h",
-    visibility: ["//visibility:private"],
+    visibility: ["//external/flashrom/bindings/rust/libflashrom"],
     srcs: ["VERSION"],
     cmd: "cat $(in) | xargs printf -- '#define FLASHROM_VERSION \"%s\"\n' > $(out)",
     out: ["flashrom_version.h"],
@@ -95,7 +95,12 @@ cc_library {
     defaults: ["flashrom_defaults"],
     host_supported: true,
     vendor_available: true,
-    visibility: ["//external/vboot_reference"],
+    recovery_available: true,
+    visibility: [
+        "//external/vboot_reference",
+        "//external/flashrom/bindings/rust/libflashrom",
+        "//external/flashrom/bindings/rust/libflashrom-sys",
+    ],
     init_rc: ["flashrom.rc"],
 
     target: {
@@ -189,6 +194,18 @@ cc_library {
                 "known_boards.c",
             ],
         },
+        riscv64: {
+            srcs: [
+                "board_enable.c",
+                "cbtable.c",
+                "chipset_enable.c",
+                "internal.c",
+                "internal_par.c",
+                "processor_enable.c",
+                "pcidev.c",
+                "known_boards.c",
+            ],
+        },
     },
 
     srcs: [
@@ -256,7 +273,6 @@ cc_library {
         "platform/endian_little.c",
         "platform/memaccess.c",
     ],
-
     export_include_dirs: ["include"],
     static_libs: ["libz"],
 
@@ -275,4 +291,15 @@ cc_binary {
     ],
 
     shared_libs: ["libflashrom"],
+}
+
+filegroup {
+    name: "libap_wpsr_srcs",
+    visibility: [":__subpackages__"],
+    srcs: [
+        "flashchips.c",
+        "flashchips_crosbl.c",
+        "writeprotect.c",
+        "writeprotect_ranges.c",
+    ],
 }

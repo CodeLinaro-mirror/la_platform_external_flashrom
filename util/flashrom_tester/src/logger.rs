@@ -35,21 +35,22 @@
 
 use flashrom_tester::types;
 use std::io::Write;
+use std::sync::Mutex;
 
-struct Logger {
+struct Logger<W: Write + Send> {
     level: log::LevelFilter,
     color: types::Color,
+    writer: Mutex<W>,
 }
 
-impl log::Log for Logger {
+impl<W: Write + Send> log::Log for Logger<W> {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
         metadata.level() <= self.level
     }
 
     fn log(&self, record: &log::Record) {
         // Write errors deliberately ignored
-        let stdout = std::io::stdout();
-        let mut lock = stdout.lock();
+        let mut lock = self.writer.lock().unwrap();
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
         let _ = write!(lock, "{}{} ", self.color.magenta, now);
         let _ = write!(
@@ -64,52 +65,52 @@ impl log::Log for Logger {
 
     fn flush(&self) {
         // Flush errors deliberately ignored
-        let _ = std::io::stdout().flush();
+        let mut lock = self.writer.lock().unwrap();
+        let _ = lock.flush();
     }
 }
 
 pub fn init(debug: bool) {
-    let mut logger = Logger {
-        level: log::LevelFilter::Info,
+    let logger = Logger {
+        level: if debug {
+            log::LevelFilter::Debug
+        } else {
+            log::LevelFilter::Info
+        },
         color: if atty::is(atty::Stream::Stdout) {
             types::COLOR
         } else {
             types::NOCOLOR
         },
+        writer: Mutex::new(std::io::stdout()),
     };
 
-    if debug {
-        logger.level = log::LevelFilter::Debug;
-    }
     log::set_max_level(logger.level);
     log::set_boxed_logger(Box::new(logger)).unwrap();
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::Read;
-
     use super::Logger;
     use flashrom_tester::types;
     use log::{Level, LevelFilter, Log, Record};
+    use std::sync::Mutex;
 
     fn run_records(records: &[Record]) -> String {
-        let buf = gag::BufferRedirect::stdout().unwrap();
-        {
-            let logger = Logger {
-                level: LevelFilter::Info,
-                color: types::COLOR,
-            };
+        let buffer = Mutex::new(Vec::new());
+        let logger = Logger {
+            level: LevelFilter::Info,
+            color: types::COLOR,
+            writer: buffer,
+        };
 
-            for record in records {
-                if logger.enabled(record.metadata()) {
-                    logger.log(record);
-                }
+        for record in records {
+            if logger.enabled(record.metadata()) {
+                logger.log(record);
             }
         }
-        let mut ret = String::new();
-        buf.into_inner().read_to_string(&mut ret).unwrap();
-        ret
+        let output_bytes = logger.writer.into_inner().unwrap();
+        String::from_utf8(output_bytes).unwrap()
     }
 
     /// Log messages have the expected format
