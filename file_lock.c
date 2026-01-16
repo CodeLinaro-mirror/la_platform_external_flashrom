@@ -215,6 +215,35 @@ static int file_lock_write_pid(struct ipc_lock *lock)
 	return 0;
 }
 
+static void report_lock_holder(struct ipc_lock *lock)
+{
+	FILE *lsof_pipe;
+	char lsof_cmd[PATH_MAX + 64];
+	char proc_path[PATH_MAX] = {0};
+	char lock_path[PATH_MAX] = {0};
+	char lsof_output[1024];
+
+	/* We need the full path to the lock file for lsof. */
+	snprintf(proc_path, sizeof(proc_path), "/proc/self/fd/%d", lock->fd);
+	if (readlink(proc_path, lock_path, sizeof(lock_path) - 1) <= 0) {
+		msg_gerr("Could not determine full lock file path.\n");
+		return;
+	}
+
+	snprintf(lsof_cmd, sizeof(lsof_cmd), "lsof '%s'", lock_path);
+	msg_ginfo("Finding lock holder with '%s'.\n", lsof_cmd);
+	lsof_pipe = popen(lsof_cmd, "r");
+	if (!lsof_pipe) {
+		msg_gerr("Failed to run '%s'.\n", lsof_cmd);
+		return;
+	}
+
+	while (fgets(lsof_output, sizeof(lsof_output), lsof_pipe))
+		msg_gerr("%s", lsof_output);
+
+	pclose(lsof_pipe);
+}
+
 static void file_lock_release(struct ipc_lock *lock)
 {
 	if (flock(lock->fd, LOCK_UN) < 0)
@@ -243,6 +272,9 @@ int acquire_lock(struct ipc_lock *lock, int timeout_msecs)
 		return -1;
 
 	if (file_lock_get(lock, timeout_msecs)) {
+		/* If locking fails, try to find out who holds the lock. */
+		report_lock_holder(lock);
+
 		lock->is_held = 0;
 		close(lock->fd);
 		return -1;
