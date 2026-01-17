@@ -93,7 +93,7 @@ void raiden_debug_basic_lifecycle_test_success(void **state)
 {
 	struct io_mock_fallback_open_state raiden_debug_fallback_open_state = {
 		.noc = 0,
-		.paths = { LOCK_FILE },
+		.paths = { NULL },
 	};
 	const struct io_mock raiden_debug_io = {
 		.libusb_get_device_list = raiden_debug_libusb_get_device_list,
@@ -115,7 +115,7 @@ void raiden_debug_targetAP_basic_lifecycle_test_success(void **state)
 {
 	struct io_mock_fallback_open_state raiden_debug_fallback_open_state = {
 		.noc = 0,
-		.paths = { LOCK_FILE },
+		.paths = { NULL },
 	};
 	const struct io_mock raiden_debug_io = {
 		.libusb_get_device_list = raiden_debug_libusb_get_device_list,
@@ -136,7 +136,7 @@ void raiden_debug_targetEC_basic_lifecycle_test_success(void **state)
 {
 	struct io_mock_fallback_open_state raiden_debug_fallback_open_state = {
 		.noc = 0,
-		.paths = { LOCK_FILE },
+		.paths = { NULL },
 	};
 	const struct io_mock raiden_debug_io = {
 		.libusb_get_device_list = raiden_debug_libusb_get_device_list,
@@ -157,7 +157,7 @@ void raiden_debug_target0_basic_lifecycle_test_success(void **state)
 {
 	struct io_mock_fallback_open_state raiden_debug_fallback_open_state = {
 		.noc = 0,
-		.paths = { LOCK_FILE },
+		.paths = { NULL },
 	};
 	const struct io_mock raiden_debug_io = {
 		.libusb_get_device_list = raiden_debug_libusb_get_device_list,
@@ -178,7 +178,7 @@ void raiden_debug_target1_basic_lifecycle_test_success(void **state)
 {
 	struct io_mock_fallback_open_state raiden_debug_fallback_open_state = {
 		.noc = 0,
-		.paths = { LOCK_FILE },
+		.paths = { NULL },
 	};
 	const struct io_mock raiden_debug_io = {
 		.libusb_get_device_list = raiden_debug_libusb_get_device_list,
