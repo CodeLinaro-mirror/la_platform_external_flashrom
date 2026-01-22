@@ -48,6 +48,7 @@ enum {
 	OPTION_WP_DISABLE,
 	OPTION_WP_LIST,
 	OPTION_PROGRESS,
+	OPTION_IGNORE_LOCK,
 };
 
 struct cli_options {
@@ -99,6 +100,7 @@ static void cli_classic_usage(const char *name)
 	       " -V | --verbose                     more verbose output\n"
 	       " -c | --chip <chipname>             probe only for specified flash chip\n"
 	       " -f | --force                       force specific operations (see man page)\n"
+	       "      --ignore-lock                 do not acquire big lock\n"
 	       " -n | --noverify                    don't auto-verify\n"
 	       " -N | --noverify-all                verify included regions only (cf. -i)\n"
 	       " -x | --extract                     extract regions to files\n"
@@ -859,6 +861,9 @@ static void parse_options(int argc, char **argv, const char *optstring,
 		case OPTION_PROGRESS:
 			options->show_progress = true;
 			break;
+		case OPTION_IGNORE_LOCK:
+			ignore_lock = true;
+			break;
 		default:
 			cli_classic_abort_usage(NULL);
 			break;
@@ -928,6 +933,7 @@ int main(int argc, char *argv[])
 		{"version",		0, NULL, 'R'},
 		{"output",		1, NULL, 'o'},
 		{"progress",		0, NULL, OPTION_PROGRESS},
+		{"ignore-lock",		0, NULL, OPTION_IGNORE_LOCK},
 		{NULL,			0, NULL, 0},
 	};
 
