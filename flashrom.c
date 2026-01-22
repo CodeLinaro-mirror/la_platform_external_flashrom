@@ -64,6 +64,8 @@ uintptr_t flashbase;
 
 /* Is writing allowed with this programmer? */
 bool programmer_may_write;
+bool ignore_lock = false;
+static bool lock_acquired = false;
 
 #define SHUTDOWN_MAXFN 32
 static int shutdown_fn_count = 0;
@@ -146,6 +148,10 @@ static int deregister_chip_restore(struct flashctx *flash)
 int programmer_init(const struct programmer_entry *prog, const char *param)
 {
 	int ret;
+	/* Use local var to avoid polluting global state; prevents side-effects if
+	   re-initialized. */
+	bool skip_lock = ignore_lock;
+
 #if CONFIG_DUMMY == 1
 	const struct programmer_entry *dummy_programmer = &programmer_dummy;
 #else
@@ -157,11 +163,25 @@ int programmer_init(const struct programmer_entry *prog, const char *param)
 		return -1;
 	}
 
-	/* Only acquire the big lock for non-dummy programmer. */
-	if (USE_BIG_LOCK && prog != dummy_programmer) {
-		/* Get big lock before doing any work that touches hardware. */
-		if (acquire_big_lock(LOCK_TIMEOUT_SECS) < 0)
-			return 1;
+	if (prog == dummy_programmer)
+		skip_lock = true;
+#if CONFIG_RAIDEN_DEBUG_SPI == 1
+	if (prog == &programmer_raiden_debug_spi) {
+		msg_pdbg("Remote programmer %s detected, disabling big lock.\n", prog->name);
+		skip_lock = true;
+	}
+#endif
+
+	/* Only acquire the big lock if allowed. */
+	if (USE_BIG_LOCK) {
+		if (!skip_lock) {
+			/* Get big lock before doing any work that touches hardware. */
+			if (acquire_big_lock(LOCK_TIMEOUT_SECS) < 0)
+				return 1;
+			lock_acquired = true;
+		} else {
+			msg_gdbg("Lock acquisition skipped (ignore-lock enabled).\n");
+		}
 	}
 
 	programmer = prog;
@@ -213,8 +233,10 @@ int programmer_init(const struct programmer_entry *prog, const char *param)
 	free(cfg.params);
 
 	/* Release lock if initialization is not succseeful. */
-	if (USE_BIG_LOCK && ret != 0)
+	if (ret != 0 && lock_acquired) {
 		release_big_lock();
+		lock_acquired = false;
+	}
 
 	return ret;
 }
@@ -236,8 +258,10 @@ int programmer_shutdown(void)
 	}
 	registered_master_count = 0;
 
-	if (USE_BIG_LOCK)
+	if (lock_acquired) {
 		release_big_lock();
+		lock_acquired = false;
+	}
 
 	return ret;
 }
