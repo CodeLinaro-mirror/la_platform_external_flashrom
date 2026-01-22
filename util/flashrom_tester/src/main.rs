@@ -99,6 +99,13 @@ fn main() {
                 .help("Write detailed logs, for debugging"),
         )
         .arg(
+            Arg::new("verbose")
+                .short('v')
+                .long("verbose")
+                .action(ArgAction::Count)
+                .help("Set flashrom verbosity level: -v (WARN), -vv (INFO), -vvv (DEBUG). Implies --debug."),
+        )
+        .arg(
             Arg::new("output-format")
                 .short('f')
                 .long("output-format")
@@ -114,7 +121,7 @@ fn main() {
         )
         .get_matches();
 
-    logger::init(matches.get_flag("log_debug"));
+    logger::init(matches.get_flag("log_debug") || matches.get_count("verbose") >= 1);
     debug!("Args parsed and logging initialized OK");
 
     debug!("Collecting crossystem info");
@@ -130,14 +137,9 @@ fn main() {
     .expect("ccd_target_type should admit only known types");
 
     let cmd: Box<dyn Flashrom> = if matches.get_flag("libflashrom") {
-        Box::new(FlashromLib::new(
-            ccd_type,
-            if matches.get_flag("log_debug") {
-                flashrom_abstraction::FLASHROM_MSG_DEBUG
-            } else {
-                flashrom_abstraction::FLASHROM_MSG_WARN
-            },
-        ))
+        let verbose_count = matches.get_count("verbose");
+        let log_level = resolve_log_level(matches.get_flag("log_debug"), verbose_count);
+        Box::new(FlashromLib::new(ccd_type, log_level))
     } else {
         Box::new(FlashromCmd {
             path: matches
@@ -145,6 +147,11 @@ fn main() {
                 .expect("flashrom_binary is required")
                 .to_string(),
             fc: ccd_type,
+            verbose_count: match matches.get_count("verbose") {
+                // If --debug is set, force max verbosity (3)
+                _ if matches.get_flag("log_debug") => 3,
+                n => n as u8,
+            },
         })
     };
 
@@ -169,6 +176,25 @@ fn main() {
     ) {
         eprintln!("Failed to run tests: {:?}", e);
         std::process::exit(1);
+    }
+}
+
+fn resolve_log_level(
+    debug_flag: bool,
+    verbose_count: u8,
+) -> Option<flashrom_abstraction::flashrom_log_level> {
+    use flashrom_abstraction::{
+        FLASHROM_MSG_DEBUG, FLASHROM_MSG_INFO, FLASHROM_MSG_WARN,
+    };
+
+    if debug_flag || verbose_count >= 3 {
+        Some(FLASHROM_MSG_DEBUG)
+    } else if verbose_count >= 2 {
+        Some(FLASHROM_MSG_INFO)
+    } else if verbose_count >= 1 {
+        Some(FLASHROM_MSG_WARN)
+    } else {
+        None
     }
 }
 
@@ -212,4 +238,28 @@ test, or press ^C again to exit immediately (possibly bricking your machine).
     }
 
     &TERMINATE_FLAG
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::resolve_log_level;
+    use flashrom_abstraction::{
+        FLASHROM_MSG_DEBUG, FLASHROM_MSG_INFO, FLASHROM_MSG_WARN,
+    };
+
+    #[test]
+    fn test_resolve_log_level() {
+        // Default
+        assert_eq!(resolve_log_level(false, 0), None);
+
+        // Verbosity levels
+        assert_eq!(resolve_log_level(false, 1), Some(FLASHROM_MSG_WARN));
+        assert_eq!(resolve_log_level(false, 2), Some(FLASHROM_MSG_INFO));
+        assert_eq!(resolve_log_level(false, 3), Some(FLASHROM_MSG_DEBUG));
+        assert_eq!(resolve_log_level(false, 4), Some(FLASHROM_MSG_DEBUG));
+
+        // Debug flag overrides
+        assert_eq!(resolve_log_level(true, 0), Some(FLASHROM_MSG_DEBUG));
+        assert_eq!(resolve_log_level(true, 1), Some(FLASHROM_MSG_DEBUG));
+    }
 }

@@ -49,7 +49,7 @@ pub struct FlashromOpt<'a> {
     pub io_opt: Option<IOOpt<'a>>,
 
     pub flash_name: bool, // --flash-name
-    pub verbose: bool,    // -V
+    pub verbose: u8,      // -V (count)
 }
 
 #[derive(Default)]
@@ -89,6 +89,7 @@ pub enum IOOpt<'a> {
 pub struct FlashromCmd {
     pub path: String,
     pub fc: FlashChip,
+    pub verbose_count: u8,
 }
 
 /// Attempt to determine the Flash size given stdout from `flashrom --flash-size`
@@ -131,6 +132,7 @@ impl crate::Flashrom for FlashromCmd {
     fn name(&self) -> Result<(String, String), FlashromError> {
         let opts = FlashromOpt {
             flash_name: true,
+            verbose: self.verbose_count,
             ..Default::default()
         };
 
@@ -153,6 +155,7 @@ impl crate::Flashrom for FlashromCmd {
                 path,
                 Some(layout),
             ))),
+            verbose: self.verbose_count,
             ..Default::default()
         };
 
@@ -168,6 +171,7 @@ impl crate::Flashrom for FlashromCmd {
                 range: Some(range),
                 ..Default::default()
             },
+            verbose: self.verbose_count,
             ..Default::default()
         };
 
@@ -181,6 +185,7 @@ impl crate::Flashrom for FlashromCmd {
                 list: true,
                 ..Default::default()
             },
+            verbose: self.verbose_count,
             ..Default::default()
         };
 
@@ -204,6 +209,7 @@ impl crate::Flashrom for FlashromCmd {
                 status: true,
                 ..Default::default()
             },
+            verbose: self.verbose_count,
             ..Default::default()
         };
 
@@ -233,6 +239,7 @@ impl crate::Flashrom for FlashromCmd {
     fn read_into_file(&self, path: &Path) -> Result<(), FlashromError> {
         let opts = FlashromOpt {
             io_opt: Some(IOOpt::Read(OperationArgs::EntireChip(path))),
+            verbose: self.verbose_count,
             ..Default::default()
         };
 
@@ -245,6 +252,7 @@ impl crate::Flashrom for FlashromCmd {
             io_opt: Some(IOOpt::Read(OperationArgs::RegionFileRegion(
                 region, path, None,
             ))),
+            verbose: self.verbose_count,
             ..Default::default()
         };
 
@@ -255,6 +263,7 @@ impl crate::Flashrom for FlashromCmd {
     fn write_from_file(&self, path: &Path) -> Result<(), FlashromError> {
         let opts = FlashromOpt {
             io_opt: Some(IOOpt::Write(OperationArgs::EntireChip(path))),
+            verbose: self.verbose_count,
             ..Default::default()
         };
 
@@ -265,6 +274,7 @@ impl crate::Flashrom for FlashromCmd {
     fn verify_from_file(&self, path: &Path) -> Result<(), FlashromError> {
         let opts = FlashromOpt {
             io_opt: Some(IOOpt::Verify(OperationArgs::EntireChip(path))),
+            verbose: self.verbose_count,
             ..Default::default()
         };
 
@@ -277,6 +287,7 @@ impl crate::Flashrom for FlashromCmd {
             io_opt: Some(IOOpt::Verify(OperationArgs::RegionFileRegion(
                 region, path, None,
             ))),
+            verbose: self.verbose_count,
             ..Default::default()
         };
 
@@ -287,6 +298,7 @@ impl crate::Flashrom for FlashromCmd {
     fn erase(&self) -> Result<(), FlashromError> {
         let opts = FlashromOpt {
             io_opt: Some(IOOpt::Erase),
+            verbose: self.verbose_count,
             ..Default::default()
         };
 
@@ -375,7 +387,7 @@ fn flashrom_decode_opts(opts: FlashromOpt) -> Vec<OsString> {
     if opts.flash_name {
         params.push("--flash-name".into());
     }
-    if opts.verbose {
+    for _ in 0..opts.verbose {
         params.push("-V".into());
     }
 
@@ -549,7 +561,7 @@ mod tests {
         assert_eq!(
             flashrom_decode_opts(FlashromOpt {
                 flash_name: true,
-                verbose: true,
+                verbose: 1,
                 ..Default::default()
             }),
             &["--flash-name", "-V"]

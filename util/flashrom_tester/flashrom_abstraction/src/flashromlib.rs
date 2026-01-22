@@ -48,8 +48,8 @@ pub struct FlashromLib {
 }
 
 impl FlashromLib {
-    pub fn new(fc: FlashChip, log_level: libflashrom::flashrom_log_level) -> FlashromLib {
-        libflashrom::set_log_level(Some(log_level));
+    pub fn new(fc: FlashChip, log_level: Option<libflashrom::flashrom_log_level>) -> FlashromLib {
+        libflashrom::set_log_level(log_level);
         let (programmer, options) = FlashChip::to_split(fc);
         let flashrom = Chip::new(Programmer::new(programmer, options).unwrap(), None).unwrap();
         FlashromLib {
