@@ -79,6 +79,10 @@ int processor_flash_enable(void)
 	 * FIXME: Move enable_flash_cs5536 and get_flashbase_sc520 here.
 	 */
 	ret = 0;
+#elif defined(__aarch64__) || defined(__arm__)
+	/* ARM and ARM64 processors do not have specific flash enable logic
+	   in this generic helper. */
+	ret = 0;
 #endif
 	return ret;
 }
