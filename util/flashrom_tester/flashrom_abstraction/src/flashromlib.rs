@@ -182,24 +182,29 @@ impl crate::Flashrom for FlashromLib {
         self.fc.can_control_hw_wp()
     }
 
-    fn set_flags(&self, flags: &FlashromFlags) -> () {
+    fn set_flags(&self, flags: &FlashromFlags) {
         self.flashrom
             .borrow_mut()
             .flag_set(FlashromFlag::FlashromFlagForce, flags.force);
-        self.flashrom
-            .borrow_mut()
-            .flag_set(FlashromFlag::FlashromFlagForceBoardmismatch, flags.force_boardmismatch);
-        self.flashrom
-            .borrow_mut()
-            .flag_set(FlashromFlag::FlashromFlagVerifyAfterWrite, flags.verify_after_write);
-        self.flashrom
-            .borrow_mut()
-            .flag_set(FlashromFlag::FlashromFlagVerifyWholeChip, flags.verify_whole_chip);
-        self.flashrom
-            .borrow_mut()
-            .flag_set(FlashromFlag::FlashromFlagSkipUnreadableRegions, flags.skip_unreadable_regions);
-        self.flashrom
-            .borrow_mut()
-            .flag_set(FlashromFlag::FlashromFlagSkipUnwritableRegions, flags.skip_unwritable_regions);
+        self.flashrom.borrow_mut().flag_set(
+            FlashromFlag::FlashromFlagForceBoardmismatch,
+            flags.force_boardmismatch,
+        );
+        self.flashrom.borrow_mut().flag_set(
+            FlashromFlag::FlashromFlagVerifyAfterWrite,
+            flags.verify_after_write,
+        );
+        self.flashrom.borrow_mut().flag_set(
+            FlashromFlag::FlashromFlagVerifyWholeChip,
+            flags.verify_whole_chip,
+        );
+        self.flashrom.borrow_mut().flag_set(
+            FlashromFlag::FlashromFlagSkipUnreadableRegions,
+            flags.skip_unreadable_regions,
+        );
+        self.flashrom.borrow_mut().flag_set(
+            FlashromFlag::FlashromFlagSkipUnwritableRegions,
+            flags.skip_unwritable_regions,
+        );
     }
 }

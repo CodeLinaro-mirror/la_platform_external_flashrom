@@ -113,7 +113,10 @@ pub fn toggle_hw_wp(dis: bool) -> Result<(), String> {
         fail_msg = Some(format!("Hardware write protect is still {}!", !dis));
         // The following message is read by the tast test. Do not modify.
         info!("Prompt for hardware WP {}able", s);
-        eprintln!(" > {}connect the battery (and/or {} the WP screw)", s, screw_state);
+        eprintln!(
+            " > {}connect the battery (and/or {} the WP screw)",
+            s, screw_state
+        );
         pause();
     }
     Ok(())

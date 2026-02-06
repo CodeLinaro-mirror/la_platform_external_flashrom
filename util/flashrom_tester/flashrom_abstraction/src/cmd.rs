@@ -100,7 +100,7 @@ fn flashrom_extract_size(stdout: &str) -> Result<i64, FlashromError> {
     match stdout
         .lines()
         .filter(|line| line.chars().all(|c| c.is_ascii_digit()))
-        .last()
+        .next_back()
         .map(str::parse::<i64>)
     {
         None => Err("Found no purely-numeric lines in flashrom output".into()),
@@ -310,7 +310,7 @@ impl crate::Flashrom for FlashromCmd {
         self.fc.can_control_hw_wp()
     }
 
-    fn set_flags(&self, _flags: &FlashromFlags) -> () {
+    fn set_flags(&self, _flags: &FlashromFlags) {
         // The flashrom CLI sets its own default flags,
         // and we currently have no need for custom flags,
         // so this set_flags function is intentionally a no-op.

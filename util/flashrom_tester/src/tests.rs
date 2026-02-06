@@ -42,10 +42,10 @@ use flashrom_abstraction::{FlashChip, Flashrom};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryInto;
-#[cfg(feature = "chromeos-host")]
-use std::fs::{self, File};
 #[cfg(not(feature = "chromeos-host"))]
 use std::fs::{self};
+#[cfg(feature = "chromeos-host")]
+use std::fs::{self, File};
 #[cfg(feature = "chromeos-host")]
 use std::io::BufRead;
 use std::sync::atomic::AtomicBool;
@@ -266,7 +266,7 @@ fn elog_sanity_test(env: &mut TestEnv) -> TestResult {
 fn host_is_chrome_test(_env: &mut TestEnv) -> TestResult {
     let release_info = if let Ok(f) = File::open("/etc/os-release") {
         let buf = std::io::BufReader::new(f);
-        parse_os_release(buf.lines().flatten())
+        parse_os_release(buf.lines().map_while(Result::ok))
     } else {
         info!("Unable to read /etc/os-release to probe system information");
         HashMap::new()

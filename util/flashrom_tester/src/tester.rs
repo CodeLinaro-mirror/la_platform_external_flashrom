@@ -155,7 +155,7 @@ impl<'a> TestEnv<'a> {
     }
 }
 
-impl<'a> Drop for TestEnv<'a> {
+impl Drop for TestEnv<'_> {
     fn drop(&mut self) {
         info!("Verifying flash remains unmodified");
         if !self.is_golden() {
@@ -308,7 +308,7 @@ impl<'a> WriteProtectState<'a> {
     }
 }
 
-impl<'a> Drop for WriteProtectState<'a> {
+impl Drop for WriteProtectState<'_> {
     fn drop(&mut self) {
         self.drop_internal()
             .expect("Error while dropping WriteProtectState")
@@ -482,7 +482,7 @@ pub fn collate_all_test_runs(
                     );
                     match error {
                         None => {}
-                        Some(e) => info!(" - {} failure details:\n{}", name, e.to_string()),
+                        Some(e) => info!(" - {} failure details:\n{}", name, e),
                     };
                 } else {
                     println!(

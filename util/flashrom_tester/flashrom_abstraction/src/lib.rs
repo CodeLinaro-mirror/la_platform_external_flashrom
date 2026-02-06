@@ -164,5 +164,5 @@ pub trait Flashrom {
     fn can_control_hw_wp(&self) -> bool;
 
     /// Set flags used by the flashrom cli.
-    fn set_flags(&self, flags: &FlashromFlags) -> ();
+    fn set_flags(&self, flags: &FlashromFlags);
 }

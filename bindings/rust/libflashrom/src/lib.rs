@@ -787,7 +787,7 @@ impl Chip {
     }
 
     /// Set a flag in the given flash context
-    pub fn flag_set(&mut self, flag: FlashromFlag, value: bool) -> () {
+    pub fn flag_set(&mut self, flag: FlashromFlag, value: bool) {
         unsafe { libflashrom_sys::flashrom_flag_set(self.ctx.as_mut(), flag.into(), value) }
     }
 }
