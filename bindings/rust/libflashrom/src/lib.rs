@@ -1071,7 +1071,11 @@ mod tests {
         flashrom_version_info, set_log_function, set_log_level, Chip, ChipInitError, InitError,
         Layout, Programmer, WriteProtectCfg,
     };
+    use once_cell::sync::Lazy;
     use std::cell::RefCell;
+    use std::sync::Mutex;
+
+    static FORK_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
     /// Helper function to run test logic in a forked process.
     /// This is necessary because the flashrom C library uses global state
@@ -1087,6 +1091,8 @@ mod tests {
         use std::os::fd::{AsFd, AsRawFd};
         use std::panic;
 
+        // Ignore poison error to prevent one test failure from bringing down the entire suite
+        let _guard = FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (read_fd, write_fd) = pipe().expect("pipe failed");
 
         match unsafe { fork() } {
@@ -1102,33 +1108,43 @@ mod tests {
 
                 let status = waitpid(child, None).expect("waitpid failed");
 
-                if let WaitStatus::Exited(_, 101) = status {
-                    let mut buf = [0; 4096];
-                    match read(read_fd.as_raw_fd(), &mut buf) {
-                        Ok(bytes_read) if bytes_read > 0 => {
-                            let panic_message = String::from_utf8_lossy(&buf[..bytes_read]);
-                            panic!(
-                                "Test panicked in child process:\n---\n{}\n---",
-                                panic_message
-                            );
-                        }
-                        Ok(_) | Err(Errno::EWOULDBLOCK) => {
-                            panic!("Test child exited with panic code 101 but sent no message.");
-                        }
-                        Err(e) => {
-                            panic!("Failed to read from pipe after child panic: {}", e);
+                match status {
+                    WaitStatus::Exited(_, 0) => {} // Success
+                    WaitStatus::Exited(_, 101) => {
+                        let mut buf = [0; 4096];
+                        match read(read_fd.as_raw_fd(), &mut buf) {
+                            Ok(bytes_read) if bytes_read > 0 => {
+                                let panic_message = String::from_utf8_lossy(&buf[..bytes_read]);
+                                panic!(
+                                    "Test panicked in child process:\n---\n{}\n---",
+                                    panic_message
+                                );
+                            }
+                            Ok(_) | Err(Errno::EWOULDBLOCK) => {
+                                panic!(
+                                    "Test child exited with panic code 101 but sent no message."
+                                );
+                            }
+                            Err(e) => {
+                                panic!("Failed to read from pipe after child panic: {}", e);
+                            }
                         }
                     }
+                    _ => panic!("Child process terminated unexpectedly: {:?}", status),
                 }
             }
             Ok(ForkResult::Child) => {
                 panic::set_hook(Box::new(move |panic_info| {
                     let msg = format!("{}", panic_info);
                     let _ = write(write_fd.as_fd(), msg.as_bytes());
-                    std::process::exit(101);
+                    // Use _exit to avoid running atexit handlers
+                    unsafe { libc::_exit(101) };
                 }));
 
                 test_fn();
+
+                // Terminate the child process immediately, bypassing atexit handlers.
+                unsafe { libc::_exit(0) };
             }
             Err(e) => panic!("Fork failed: {}", e),
         }
