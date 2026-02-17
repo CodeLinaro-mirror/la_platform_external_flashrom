@@ -7,15 +7,15 @@ description: "flashrom is a utility for detecting, reading, writing, verifying a
 third_party {
   license_type: RESTRICTED
   last_upgrade_date {
-    year: 2025
-    month: 11
-    day: 27
+    year: 2026
+    month: 1
+    day: 16
   }
   homepage: "https://flashrom.org/"
   identifier {
     type: "Git"
     value: "https://chromium.googlesource.com/chromiumos/third_party/flashrom/"
-    version: "0d20bd46f1bf2f11a33d817f01937fe0071a15bc"
+    version: "1c70ca25cdb62f9448e7e650be1faf32ab8f7f0c"
     primary_source: true
   }
 }
