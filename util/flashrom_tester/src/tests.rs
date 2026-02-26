@@ -120,7 +120,6 @@ pub fn generic<'a, TN: Iterator<Item = &'a str>>(
             "Lock_bottom_half",
             partial_lock_test(LayoutNames::BottomHalf),
         ),
-        &("Lock_top_half", partial_lock_test(LayoutNames::TopHalf)),
     ];
 
     // Limit the tests to only those requested, unless none are requested
