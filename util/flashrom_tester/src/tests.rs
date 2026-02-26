@@ -111,6 +111,7 @@ pub fn generic<'a, TN: Iterator<Item = &'a str>>(
         &("Fail_to_verify", verify_fail_test),
         &("HWWP_Locks_SWWP", hwwp_locks_swwp_test),
         &("Lock_top_quad", partial_lock_test(LayoutNames::TopQuad)),
+        &("Lock_top_eighth", partial_lock_test(LayoutNames::TopEighth)),
         &(
             "Lock_bottom_quad",
             partial_lock_test(LayoutNames::BottomQuad),

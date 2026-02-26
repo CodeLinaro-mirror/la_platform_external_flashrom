@@ -42,6 +42,8 @@ pub enum LayoutNames {
     TopHalf,
     BottomHalf,
     BottomQuad,
+    TopEighth,
+    BottomEighth,
 }
 
 impl LayoutNames {
@@ -52,6 +54,8 @@ impl LayoutNames {
             LayoutNames::TopHalf => LayoutNames::BottomHalf,
             LayoutNames::BottomHalf => LayoutNames::TopHalf,
             LayoutNames::BottomQuad => LayoutNames::TopQuad,
+            LayoutNames::TopEighth => LayoutNames::BottomEighth,
+            LayoutNames::BottomEighth => LayoutNames::TopEighth,
         }
     }
 }
@@ -60,10 +64,13 @@ impl LayoutNames {
 pub struct LayoutSizes {
     half_sz: i64,
     quad_sz: i64,
+    eighth_sz: i64,
     rom_top: i64,
     bottom_half_top: i64,
     bottom_quad_top: i64,
+    bottom_eighth_top: i64,
     top_quad_bottom: i64,
+    top_eighth_bottom: i64,
 }
 
 pub fn get_layout_sizes(rom_sz: i64) -> Result<LayoutSizes, String> {
@@ -76,10 +83,13 @@ pub fn get_layout_sizes(rom_sz: i64) -> Result<LayoutSizes, String> {
     Ok(LayoutSizes {
         half_sz: rom_sz / 2,
         quad_sz: rom_sz / 4,
+        eighth_sz: rom_sz / 8,
         rom_top: rom_sz - 1,
         bottom_half_top: (rom_sz / 2) - 1,
         bottom_quad_top: (rom_sz / 4) - 1,
+        bottom_eighth_top: (rom_sz / 8) - 1,
         top_quad_bottom: (rom_sz / 4) * 3,
+        top_eighth_bottom: (rom_sz / 8) * 7,
     })
 }
 
@@ -89,14 +99,18 @@ pub fn layout_section(ls: &LayoutSizes, ln: LayoutNames) -> (&'static str, i64, 
         LayoutNames::TopHalf => ("TOP_HALF", ls.half_sz, ls.half_sz),
         LayoutNames::BottomHalf => ("BOTTOM_HALF", 0, ls.half_sz),
         LayoutNames::BottomQuad => ("BOTTOM_QUAD", 0, ls.quad_sz),
+        LayoutNames::TopEighth => ("TOP_EIGHTH", ls.top_eighth_bottom, ls.eighth_sz),
+        LayoutNames::BottomEighth => ("BOTTOM_EIGHTH", 0, ls.eighth_sz),
     }
 }
 
 pub fn construct_layout_file<F: Write>(mut target: F, ls: &LayoutSizes) -> std::io::Result<()> {
+    writeln!(target, "000000:{:x} BOTTOM_EIGHTH", ls.bottom_eighth_top)?;
     writeln!(target, "000000:{:x} BOTTOM_QUAD", ls.bottom_quad_top)?;
     writeln!(target, "000000:{:x} BOTTOM_HALF", ls.bottom_half_top)?;
     writeln!(target, "{:x}:{:x} TOP_HALF", ls.half_sz, ls.rom_top)?;
-    writeln!(target, "{:x}:{:x} TOP_QUAD", ls.top_quad_bottom, ls.rom_top)
+    writeln!(target, "{:x}:{:x} TOP_QUAD", ls.top_quad_bottom, ls.rom_top)?;
+    writeln!(target, "{:x}:{:x} TOP_EIGHTH", ls.top_eighth_bottom, ls.rom_top)
 }
 
 pub fn toggle_hw_wp(dis: bool) -> Result<(), String> {
@@ -209,10 +223,12 @@ mod tests {
 
         assert_eq!(
             &buf[..],
-            &b"000000:3fff BOTTOM_QUAD\n\
+            &b"000000:1fff BOTTOM_EIGHTH\n\
+               000000:3fff BOTTOM_QUAD\n\
                000000:7fff BOTTOM_HALF\n\
                8000:ffff TOP_HALF\n\
-               c000:ffff TOP_QUAD\n"[..]
+               c000:ffff TOP_QUAD\n\
+               e000:ffff TOP_EIGHTH\n"[..]
         );
     }
 
@@ -235,10 +251,13 @@ mod tests {
             LayoutSizes {
                 half_sz: 0x8000,
                 quad_sz: 0x4000,
+                eighth_sz: 0x2000,
                 rom_top: 0xFFFF,
                 bottom_half_top: 0x7FFF,
                 bottom_quad_top: 0x3FFF,
+                bottom_eighth_top: 0x1FFF,
                 top_quad_bottom: 0xC000,
+                top_eighth_bottom: 0xE000,
             }
         );
     }
