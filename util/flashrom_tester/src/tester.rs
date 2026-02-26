@@ -66,6 +66,8 @@ pub struct TestEnv<'a> {
     random_data: PathBuf,
     /// The path to a file containing layout data.
     pub layout_file: PathBuf,
+    /// The path to a custom FMAP file (optional).
+    pub fmap_file: Option<PathBuf>,
 }
 
 impl<'a> TestEnv<'a> {
@@ -73,6 +75,7 @@ impl<'a> TestEnv<'a> {
         chip_type: FlashChip,
         cmd: &'a dyn Flashrom,
         print_layout: bool,
+        fmap_file: Option<PathBuf>,
     ) -> Result<Self, FlashromError> {
         let rom_sz = cmd.get_size()?;
         let out = TestEnv {
@@ -83,6 +86,7 @@ impl<'a> TestEnv<'a> {
             original_flash_contents: "/tmp/flashrom_tester_golden.bin".into(),
             random_data: "/tmp/random_content.bin".into(),
             layout_file: create_layout_file(rom_sz, Path::new("/tmp/"), print_layout),
+            fmap_file,
         };
         let flags = FlashromFlags::default();
         info!("Set flags: {}", flags);
@@ -117,6 +121,10 @@ impl<'a> TestEnv<'a> {
     /// as the flash chip.
     pub fn random_data_file(&self) -> &Path {
         &self.random_data
+    }
+
+    pub fn golden_image_file(&self) -> &Path {
+        &self.original_flash_contents
     }
 
     pub fn layout(&self) -> &LayoutSizes {
@@ -406,13 +414,14 @@ pub fn run_all_tests<T, TS>(
     ts: TS,
     terminate_flag: Option<&AtomicBool>,
     print_layout: bool,
+    fmap_file: Option<PathBuf>,
 ) -> Vec<(String, (TestConclusion, Option<TestError>))>
 where
     T: TestCase + Copy,
     TS: IntoIterator<Item = T>,
 {
-    let mut env =
-        TestEnv::create(chip, cmd, print_layout).expect("Failed to set up test environment");
+    let mut env = TestEnv::create(chip, cmd, print_layout, fmap_file)
+        .expect("Failed to set up test environment");
 
     let mut results = Vec::new();
     for t in ts {

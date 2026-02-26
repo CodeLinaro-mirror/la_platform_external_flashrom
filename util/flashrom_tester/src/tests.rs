@@ -42,12 +42,11 @@ use flashrom_abstraction::{FlashChip, Flashrom};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryInto;
-#[cfg(not(feature = "chromeos-host"))]
-use std::fs::{self};
-#[cfg(feature = "chromeos-host")]
 use std::fs::{self, File};
 #[cfg(feature = "chromeos-host")]
 use std::io::BufRead;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 const ELOG_FILE: &str = "/tmp/elog.file";
@@ -95,6 +94,7 @@ pub fn generic<'a, TN: Iterator<Item = &'a str>>(
     test_names: Option<TN>,
     terminate_flag: Option<&AtomicBool>,
     crossystem: String,
+    fmap_file: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     utils::ac_power_warning();
 
@@ -110,6 +110,7 @@ pub fn generic<'a, TN: Iterator<Item = &'a str>>(
         &("Erase_and_Write", erase_write_test),
         &("Fail_to_verify", verify_fail_test),
         &("HWWP_Locks_SWWP", hwwp_locks_swwp_test),
+        &("Lock_ro_write_rw", lock_ro_write_rw_test),
         &("Lock_top_quad", partial_lock_test(LayoutNames::TopQuad)),
         &("Lock_top_eighth", partial_lock_test(LayoutNames::TopEighth)),
         &(
@@ -135,7 +136,7 @@ pub fn generic<'a, TN: Iterator<Item = &'a str>>(
 
     // ------------------------.
     // Run all the tests and collate the findings:
-    let results = tester::run_all_tests(fc, cmd, tests, terminate_flag, print_layout);
+    let results = tester::run_all_tests(fc, cmd, tests, terminate_flag, print_layout, fmap_file);
 
     // Any leftover filtered names were specified to be run but don't exist
     for leftover in filter_names.iter().flatten() {
@@ -347,6 +348,85 @@ fn verify_fail_test(env: &mut TestEnv) -> TestResult {
         Ok(_) => Err("Verification says flash is full of random data".into()),
         Err(_) => Ok(()),
     }
+}
+
+/// Identifies `WP_RO` and a writable RW region (e.g. `RW_MISC` or `RW_SECTION_A`) via FMAP,
+/// then verifies protection on `WP_RO` while allowing writes to the RW region.
+/// This acts as a partial lock test that doesn't rely on generic top/bottom boundaries,
+/// avoiding interference with regions like Intel ME.
+fn lock_ro_write_rw_test(env: &mut TestEnv) -> TestResult {
+    env.ensure_golden()?;
+
+    const DUMP_PATH: &str = "/tmp/full_flash_dump.bin";
+    const FMAP_PATH: &str = "/tmp/fmap.bin";
+
+    let fmap_data = if let Some(ref path) = env.fmap_file {
+        warn!(
+            "Loading FMAP from custom file (EMERGENCY USE ONLY): {:?}",
+            path
+        );
+        fs::read(path)?
+    } else {
+        info!("Reading FMAP region from chip.");
+        env.cmd.read_region_into_file(FMAP_PATH.as_ref(), "FMAP")?;
+        fs::read(FMAP_PATH)?
+    };
+
+    // 1. Find WP_RO
+    let (wp_ro_offset, wp_ro_size) = utils::find_fmap_region(&fmap_data, "WP_RO")
+        .map_err(|e| format!("Could not find WP_RO in FMAP: {}", e))?;
+
+    // 2. Find a suitable RW region to test write success on (avoiding ME)
+    let rw_region_candidates = ["RW_MISC", "RW_SECTION_A", "RW_LEGACY"];
+    let (rw_offset, rw_size) = rw_region_candidates
+        .iter()
+        .find_map(|candidate| utils::find_fmap_region(&fmap_data, candidate).ok())
+        .ok_or("Could not find any suitable RW region (like RW_MISC) in FMAP")?;
+
+    // 3. Create a dynamic layout file for this specific test
+    let layout_path = Path::new("/tmp/layout_ro_rw_test.file");
+    let mut layout_file = File::create(layout_path)?;
+    writeln!(
+        layout_file,
+        "{:06x}:{:06x} WP_RO",
+        wp_ro_offset,
+        wp_ro_offset + wp_ro_size - 1
+    )?;
+    writeln!(
+        layout_file,
+        "{:06x}:{:06x} TEST_RW",
+        rw_offset,
+        rw_offset + rw_size - 1
+    )?;
+    layout_file.flush()?;
+
+    // 4. Configure WP
+    env.wp.set_hw(false)?;
+    env.wp.set_range((wp_ro_offset, wp_ro_size), true)?;
+    env.wp.set_hw(true)?;
+
+    // 5. Check that we cannot write to WP_RO
+    if env
+        .cmd
+        .write_from_file_region(env.random_data_file(), "WP_RO", layout_path)
+        .is_ok()
+    {
+        return Err("WP_RO should be locked, but was overwritten with random data".into());
+    }
+
+    // Make sure flash didn't actually change despite flashrom failing
+    env.cmd.read_into_file(DUMP_PATH.as_ref())?;
+    let new_flash_data = fs::read(DUMP_PATH)?;
+    let original_flash_data = fs::read(env.golden_image_file())?;
+    if original_flash_data != new_flash_data {
+        return Err("Flash content changed even though WP_RO write returned an error!".into());
+    }
+
+    // 6. Check that we CAN write to TEST_RW
+    env.cmd
+        .write_from_file_region(env.random_data_file(), "TEST_RW", layout_path)?;
+
+    Ok(())
 }
 
 /// Ad-hoc parsing of os-release(5); mostly according to the spec,

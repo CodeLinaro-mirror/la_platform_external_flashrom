@@ -41,6 +41,7 @@ mod logger;
 use clap::{Arg, ArgAction, Command};
 use flashrom_abstraction::{FlashChip, Flashrom, FlashromCmd, FlashromLib};
 use flashrom_tester::{tester, tests};
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
 pub mod built_info {
@@ -115,6 +116,12 @@ fn main() {
                 .default_value("pretty"),
         )
         .arg(
+            Arg::new("fmap-file")
+                .long("fmap-file")
+                .help("Path to a custom FMAP binary (EMERGENCY USE ONLY)")
+                .hide(true),
+        )
+        .arg(
             Arg::new("test_name")
                 .num_args(1..)
                 .help("Names of individual tests to run (run all if unspecified)"),
@@ -164,6 +171,7 @@ fn main() {
     let test_names = matches
         .get_many::<String>("test_name")
         .map(|v| v.map(|s| s.as_str()));
+    let fmap_file = matches.get_one::<String>("fmap-file").map(PathBuf::from);
 
     if let Err(e) = tests::generic(
         cmd.as_ref(),
@@ -173,6 +181,7 @@ fn main() {
         test_names,
         Some(handle_sigint()),
         crossystem,
+        fmap_file,
     ) {
         eprintln!("Failed to run tests: {:?}", e);
         std::process::exit(1);
@@ -183,9 +192,7 @@ fn resolve_log_level(
     debug_flag: bool,
     verbose_count: u8,
 ) -> Option<flashrom_abstraction::flashrom_log_level> {
-    use flashrom_abstraction::{
-        FLASHROM_MSG_DEBUG, FLASHROM_MSG_INFO, FLASHROM_MSG_WARN,
-    };
+    use flashrom_abstraction::{FLASHROM_MSG_DEBUG, FLASHROM_MSG_INFO, FLASHROM_MSG_WARN};
 
     if debug_flag || verbose_count >= 3 {
         Some(FLASHROM_MSG_DEBUG)
@@ -243,9 +250,7 @@ test, or press ^C again to exit immediately (possibly bricking your machine).
 #[cfg(test)]
 mod unit_tests {
     use super::resolve_log_level;
-    use flashrom_abstraction::{
-        FLASHROM_MSG_DEBUG, FLASHROM_MSG_INFO, FLASHROM_MSG_WARN,
-    };
+    use flashrom_abstraction::{FLASHROM_MSG_DEBUG, FLASHROM_MSG_INFO, FLASHROM_MSG_WARN};
 
     #[test]
     fn test_resolve_log_level() {
