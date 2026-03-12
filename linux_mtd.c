@@ -366,24 +366,27 @@ static enum flashrom_wp_result linux_mtd_wp_read_cfg(struct flashrom_wp_cfg *cfg
 static enum flashrom_wp_result linux_mtd_wp_write_cfg(struct flashctx *flash, const struct flashrom_wp_cfg *cfg)
 {
 	const struct linux_mtd_data *data = flash->mst->opaque.data;
+	struct flashrom_wp_cfg target_cfg = *cfg;
+
+	/*
+	 * MTD requires range.len > 0 when enabling WP.
+	 * Disabling WP will always unlock the entire chip (range becomes 0).
+	 */
+	if (target_cfg.mode == FLASHROM_WP_MODE_DISABLED) {
+		target_cfg.range.start = 0;
+		target_cfg.range.len = 0;
+	} else if (target_cfg.range.len == 0) {
+		return FLASHROM_WP_ERR_OTHER;
+	}
 
 	const struct erase_info_user entire_chip = {
 		.start = 0,
 		.length = data->total_size,
 	};
 	const struct erase_info_user desired_range = {
-		.start = cfg->range.start,
-		.length = cfg->range.len,
+		.start = target_cfg.range.start,
+		.length = target_cfg.range.len,
 	};
-
-	/*
-	 * MTD ioctls will enable hardware status register protection if and
-	 * only if the protected region is non-empty. Return an error if the
-	 * cfg cannot be activated using the MTD interface.
-	 */
-	if ((cfg->range.len == 0) != (cfg->mode == FLASHROM_WP_MODE_DISABLED)) {
-		return FLASHROM_WP_ERR_OTHER;
-	}
 
 	/*
 	 * MTD handles write-protection additively, so whatever new range is
@@ -398,7 +401,7 @@ static enum flashrom_wp_result linux_mtd_wp_write_cfg(struct flashctx *flash, co
 		return FLASHROM_WP_ERR_WRITE_FAILED;
 	}
 
-	if (cfg->range.len > 0) {
+	if (target_cfg.range.len > 0) {
 		ret = ioctl(fileno(data->dev_fp), MEMLOCK, &desired_range);
 		if (ret < 0) {
 			msg_perr("%s: Failed to enable write-protection, "
@@ -414,9 +417,9 @@ static enum flashrom_wp_result linux_mtd_wp_write_cfg(struct flashctx *flash, co
 	if (read_ret != FLASHROM_WP_OK)
 		return read_ret;
 
-	if (readback_cfg.mode != cfg->mode ||
-		readback_cfg.range.start != cfg->range.start ||
-		readback_cfg.range.len != cfg->range.len) {
+	if (readback_cfg.mode != target_cfg.mode ||
+		readback_cfg.range.start != target_cfg.range.start ||
+		readback_cfg.range.len != target_cfg.range.len) {
 		return FLASHROM_WP_ERR_VERIFY_FAILED;
 	}
 
