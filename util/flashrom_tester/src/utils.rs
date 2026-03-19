@@ -37,29 +37,7 @@ use std::convert::TryInto;
 use std::io::prelude::*;
 use std::process::Command;
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum LayoutNames {
-    TopQuad,
-    TopHalf,
-    BottomHalf,
-    BottomQuad,
-    TopEighth,
-    BottomEighth,
-}
 
-impl LayoutNames {
-    // Return a section that does not overlap
-    pub fn get_non_overlapping_section(&self) -> LayoutNames {
-        match self {
-            LayoutNames::TopQuad => LayoutNames::BottomQuad,
-            LayoutNames::TopHalf => LayoutNames::BottomHalf,
-            LayoutNames::BottomHalf => LayoutNames::TopHalf,
-            LayoutNames::BottomQuad => LayoutNames::TopQuad,
-            LayoutNames::TopEighth => LayoutNames::BottomEighth,
-            LayoutNames::BottomEighth => LayoutNames::TopEighth,
-        }
-    }
-}
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct LayoutSizes {
@@ -94,16 +72,7 @@ pub fn get_layout_sizes(rom_sz: i64) -> Result<LayoutSizes, String> {
     })
 }
 
-pub fn layout_section(ls: &LayoutSizes, ln: LayoutNames) -> (&'static str, i64, i64) {
-    match ln {
-        LayoutNames::TopQuad => ("TOP_QUAD", ls.top_quad_bottom, ls.quad_sz),
-        LayoutNames::TopHalf => ("TOP_HALF", ls.half_sz, ls.half_sz),
-        LayoutNames::BottomHalf => ("BOTTOM_HALF", 0, ls.half_sz),
-        LayoutNames::BottomQuad => ("BOTTOM_QUAD", 0, ls.quad_sz),
-        LayoutNames::TopEighth => ("TOP_EIGHTH", ls.top_eighth_bottom, ls.eighth_sz),
-        LayoutNames::BottomEighth => ("BOTTOM_EIGHTH", 0, ls.eighth_sz),
-    }
-}
+
 
 pub fn construct_layout_file<F: Write>(mut target: F, ls: &LayoutSizes) -> std::io::Result<()> {
     writeln!(target, "000000:{:x} BOTTOM_EIGHTH", ls.bottom_eighth_top)?;

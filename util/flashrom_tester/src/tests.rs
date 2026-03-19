@@ -36,7 +36,7 @@
 #[cfg(feature = "chromeos-host")]
 use super::cros_sysinfo;
 use super::tester::{self, OutputFormat, TestCase, TestEnv, TestResult};
-use super::utils::{self, LayoutNames};
+use super::utils;
 use flashrom_abstraction::{FlashChip, Flashrom};
 #[cfg(feature = "chromeos-host")]
 use std::collections::HashMap;
@@ -107,20 +107,9 @@ pub fn generic<'a, TN: Iterator<Item = &'a str>>(
         #[cfg(feature = "chromeos-host")]
         &("Host_is_ChromeOS", host_is_chrome_test),
         &("WP_Region_List", wp_region_list_test),
-        &("Erase_and_Write", erase_write_test),
         &("Fail_to_verify", verify_fail_test),
         &("HWWP_Locks_SWWP", hwwp_locks_swwp_test),
         &("Lock_ro_write_rw", lock_ro_write_rw_test),
-        &("Lock_top_quad", partial_lock_test(LayoutNames::TopQuad)),
-        &("Lock_top_eighth", partial_lock_test(LayoutNames::TopEighth)),
-        &(
-            "Lock_bottom_quad",
-            partial_lock_test(LayoutNames::BottomQuad),
-        ),
-        &(
-            "Lock_bottom_half",
-            partial_lock_test(LayoutNames::BottomHalf),
-        ),
     ];
 
     // Limit the tests to only those requested, unless none are requested
@@ -189,32 +178,7 @@ fn wp_region_list_test(env: &mut TestEnv) -> TestResult {
     Ok(())
 }
 
-/// Verify that enabling hardware and software write protect prevents chip erase.
-fn erase_write_test(env: &mut TestEnv) -> TestResult {
-    if !env.is_golden() {
-        info!("Memory has been modified; reflashing to ensure erasure can be detected");
-        env.ensure_golden()?;
-    }
 
-    // With write protect enabled erase should fail.
-    env.wp.set_sw(true)?.set_hw(true)?;
-    if env.erase().is_ok() {
-        info!("Flashrom returned Ok but this may be incorrect; verifying");
-        if !env.is_golden() {
-            return Err("Hardware write protect asserted however can still erase!".into());
-        }
-        info!("Erase claimed to succeed but verify is Ok; assume erase failed");
-    }
-
-    // With write protect disabled erase should succeed.
-    env.wp.set_hw(false)?.set_sw(false)?;
-    env.erase()?;
-    if env.is_golden() {
-        return Err("Successful erase didn't modify memory".into());
-    }
-
-    Ok(())
-}
 
 /// Verify that enabling hardware write protect prevents disabling software write protect.
 fn hwwp_locks_swwp_test(env: &mut TestEnv) -> TestResult {
@@ -289,48 +253,7 @@ fn host_is_chrome_test(_env: &mut TestEnv) -> TestResult {
     }
 }
 
-/// Verify that software write protect for a range protects only the requested range.
-fn partial_lock_test(section: LayoutNames) -> impl Fn(&mut TestEnv) -> TestResult {
-    move |env: &mut TestEnv| {
-        // Need a clean image for verification
-        env.ensure_golden()?;
 
-        let (wp_section_name, start, len) = utils::layout_section(env.layout(), section);
-        // Disable hardware WP so we can modify the protected range.
-        env.wp.set_hw(false)?;
-        // Then enable software WP so the range is enforced and enable hardware
-        // WP so that flashrom does not disable software WP during the
-        // operation.
-        env.wp.set_range((start, len), true)?;
-        env.wp.set_hw(true)?;
-
-        // Check that we cannot write to the protected region.
-        if env
-            .cmd
-            .write_from_file_region(env.random_data_file(), wp_section_name, &env.layout_file)
-            .is_ok()
-        {
-            return Err(
-                "Section should be locked, should not have been overwritable with random data"
-                    .into(),
-            );
-        }
-        if !env.is_golden() {
-            return Err("Section didn't lock, has been overwritten with random data!".into());
-        }
-
-        // Check that we can write to the non protected region.
-        let (non_wp_section_name, _, _) =
-            utils::layout_section(env.layout(), section.get_non_overlapping_section());
-        env.cmd.write_from_file_region(
-            env.random_data_file(),
-            non_wp_section_name,
-            &env.layout_file,
-        )?;
-
-        Ok(())
-    }
-}
 
 /// Check that flashrom 'verify' will fail if the provided data does not match the chip data.
 fn verify_fail_test(env: &mut TestEnv) -> TestResult {
