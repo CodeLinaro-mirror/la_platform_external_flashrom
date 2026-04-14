@@ -120,6 +120,9 @@ static int file_lock_open_or_create(struct ipc_lock *lock)
 	"/run/lock",
 	// Fallback to temporary directory.
 	"/tmp",
+#elif defined(__ANDROID_RECOVERY__)
+	// In recovery contexts /data is restricted and /tmp is available.
+	"/tmp",
 #else
 	// flashrom called as a subprocess with its own SELinux context.
 	"/data/vendor/flashrom/tmp",
