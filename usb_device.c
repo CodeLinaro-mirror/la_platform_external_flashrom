@@ -357,8 +357,6 @@ int usb_device_claim(struct usb_device *device)
 	if (ret != 0) {
 		msg_perr("USB: Could not claim device interface %d\n",
 				device->interface_descriptor->bInterfaceNumber);
-		libusb_attach_kernel_driver(device->handle,
-			device->interface_descriptor->bInterfaceNumber);
 		return ret;
 	}
 
@@ -383,13 +381,27 @@ int usb_device_claim(struct usb_device *device)
 
 struct usb_device *usb_device_free(struct usb_device *device)
 {
-	struct usb_device *next = device->next;
+	struct usb_device *next;
+
+	if (device == NULL)
+		return NULL;
+
+	next = device->next;
 
 	if (device->handle != NULL) {
 		libusb_release_interface(device->handle,
 			device->interface_descriptor->bInterfaceNumber);
-		libusb_attach_kernel_driver(device->handle,
-			device->interface_descriptor->bInterfaceNumber);
+
+		/*
+		 * Vendor-specific interfaces generally do not have standard kernel
+		 * drivers attached. Attempting to re-attach drivers to them during
+		 * cleanup can cause potential kernel hangs.
+		 */
+		if (device->interface_descriptor->bInterfaceClass != LIBUSB_CLASS_VENDOR_SPEC) {
+			libusb_attach_kernel_driver(device->handle,
+				device->interface_descriptor->bInterfaceNumber);
+		}
+
 		libusb_close(device->handle);
 	}
 

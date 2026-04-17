@@ -1300,19 +1300,15 @@ static int raiden_debug_spi_shutdown(void * data)
 				NULL,
 				0,
 				TRANSFER_TIMEOUT_MS));
-	if (ret != 0) {
+	if (ret != 0)
 		msg_perr("Raiden: Failed to disable SPI bridge\n");
-		free(ctx_data);
-		free(spi_config);
-		return ret;
-	}
 
 	usb_device_free(ctx_data->dev);
 	libusb_exit(NULL);
 	free(ctx_data);
 	free(spi_config);
 
-	return 0;
+	return ret;
 }
 
 static const struct spi_master spi_master_raiden_debug = {
@@ -1492,8 +1488,13 @@ static int decode_programmer_param(const struct programmer_cfg *cfg, uint8_t *re
 static void free_dev_list(struct usb_device **dev_lst)
 {
 	struct usb_device *dev = *dev_lst;
-	/* free devices we don't care about */
-	dev = dev->next;
+	if (!dev)
+		return;
+
+	struct usb_device *next = dev->next;
+	dev->next = NULL;
+
+	dev = next;
 	while (dev)
 		dev = usb_device_free(dev);
 }
@@ -1506,14 +1507,15 @@ static int raiden_debug_spi_init(const struct programmer_cfg *cfg)
 	struct usb_device *device = NULL;
 	bool found = false;
 	int ret;
+	int libusb_initialized = 0;
+	struct spi_master *spi_config = NULL;
+	struct raiden_debug_spi_data *data = NULL;
 
 	uint8_t request_enable;
         uint16_t request_parameter;
         ret = decode_programmer_param(cfg, &request_enable, &request_parameter);
-	if (ret != 0) {
-		free(serial);
-		return ret;
-	}
+	if (ret != 0)
+		goto out;
 
 	usb_match_init(cfg, &match);
 
@@ -1524,15 +1526,14 @@ static int raiden_debug_spi_init(const struct programmer_cfg *cfg)
 	ret = LIBUSB(libusb_init(NULL));
 	if (ret != 0) {
 		msg_perr("Raiden: libusb_init failed\n");
-		free(serial);
-		return ret;
+		goto out;
 	}
+	libusb_initialized = 1;
 
 	ret = usb_device_find(&match, &current);
 	if (ret != 0) {
 		msg_perr("Raiden: Failed to find devices\n");
-		free(serial);
-		return ret;
+		goto out_exit_libusb;
 	}
 
 	uint8_t in_endpoint  = 0;
@@ -1546,9 +1547,16 @@ static int raiden_debug_spi_init(const struct programmer_cfg *cfg)
 			goto loop_end;
 		}
 
-		if (usb_device_claim(device)) {
+		ret = usb_device_claim(device);
+		if (ret) {
 			msg_pdbg("Raiden: Failed to claim USB device");
 			usb_device_show(" ", current);
+			if (usb_device_is_libusb_error(ret) &&
+			    ret == LIBUSB_ERROR(LIBUSB_ERROR_BUSY) &&
+			    device->handle != NULL) {
+				msg_perr("Raiden: Device is busy, attempting to reset...\n");
+				libusb_reset_device(device->handle);
+			}
 			goto loop_end;
 		}
 
@@ -1592,8 +1600,8 @@ loop_end:
 
 	if (!device || !found) {
 		msg_perr("Raiden: No usable device found.\n");
-		free(serial);
-		return 1;
+		ret = 1;
+		goto out_exit_libusb;
 	}
 
 	free_dev_list(&current);
@@ -1611,7 +1619,7 @@ loop_end:
 				TRANSFER_TIMEOUT_MS));
 	if (ret != 0) {
 		msg_perr("Raiden: Failed to enable SPI bridge\n");
-		return ret;
+		goto out_free_dev;
 	}
 
 	/*
@@ -1623,16 +1631,17 @@ loop_end:
 		(request_enable == RAIDEN_DEBUG_SPI_REQ_ENABLE_EC))
 		usleep(50 * 1000);
 
-	struct spi_master *spi_config = calloc(1, sizeof(*spi_config));
+	spi_config = calloc(1, sizeof(*spi_config));
 	if (!spi_config) {
 		msg_perr("Unable to allocate space for SPI master.\n");
-		return SPI_GENERIC_ERROR;
+		ret = SPI_GENERIC_ERROR;
+		goto out_free_dev;
 	}
-	struct raiden_debug_spi_data *data = calloc(1, sizeof(*data));
+	data = calloc(1, sizeof(*data));
 	if (!data) {
-		free(spi_config);
 		msg_perr("Unable to allocate space for extra SPI master data.\n");
-		return SPI_GENERIC_ERROR;
+		ret = SPI_GENERIC_ERROR;
+		goto out_free_spi_config;
 	}
 
 	*spi_config = spi_master_raiden_debug;
@@ -1653,12 +1662,29 @@ loop_end:
 			 "    protocol       = %u\n"
 			 "    status         = 0x%05x\n",
 			 data->dev->interface_descriptor->bInterfaceProtocol, ret);
-		free(data);
-		free(spi_config);
-		return SPI_GENERIC_ERROR;
+		ret = SPI_GENERIC_ERROR;
+		goto out_free_data;
 	}
 
-	return register_spi_master(spi_config, data);
+	ret = register_spi_master(spi_config, data);
+	if (ret != 0)
+		goto out_free_data;
+
+	free(serial);
+	return 0;
+
+out_free_data:
+	free(data);
+out_free_spi_config:
+	free(spi_config);
+out_free_dev:
+	usb_device_free(device);
+out_exit_libusb:
+	if (libusb_initialized)
+		libusb_exit(NULL);
+out:
+	free(serial);
+	return ret;
 }
 
 const struct programmer_entry programmer_raiden_debug_spi = {
