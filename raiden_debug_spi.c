@@ -695,6 +695,33 @@ static void fill_usb_packet(struct usb_spi_packet_ctx *dst,
 }
 
 /*
+ * Read data possibly pending on the target before starting the session.
+ *
+ * @param dev       USB Device with open connection to the target
+ * @param in_ep     Data In endpoint of the device.
+ */
+static void drain_usb_interface(const struct usb_device *dev, uint8_t in_ep)
+{
+	uint8_t drain_buf[USB_MAX_PACKET_SIZE];
+	int received;
+	int max_packets = 100; /* There should never be this many. */
+
+	/* Keep reading until there is no more data. */
+	while (libusb_bulk_transfer(dev->handle,
+				    in_ep,
+				    drain_buf,
+				    sizeof(drain_buf),
+				    &received,
+				    /* 20 ms, an arbitrary timeout. */
+				    20) == 0) {
+		if (max_packets-- == 0) {
+			msg_pwarn("Raiden: DUT keeps flooding USB interface\n");
+			break;
+		}
+	}
+}
+
+/*
  * Receive the data from the device USB endpoint and store in the packet.
  *
  * @param ctx_data      Raiden SPI config.
@@ -1621,6 +1648,13 @@ loop_end:
 		msg_perr("Raiden: Failed to enable SPI bridge\n");
 		goto out_free_dev;
 	}
+
+	/*
+	 * In case when the previous session was interrupted some data could
+	 * be still sitting in the device USB output buffer. Drain it before
+	 * starting the new session.
+	 */
+	drain_usb_interface(device, in_endpoint);
 
 	/*
 	 * Allow for power to settle on the AP and EC flash devices.
