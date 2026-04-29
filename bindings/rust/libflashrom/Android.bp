@@ -9,15 +9,16 @@ cc_library_static {
     srcs: ["src/log.c"],
     cflags: ["-Wno-missing-prototypes"],
     vendor_available: true,
-    visibility: ["//visibility:private"],
     include_dirs: ["external/flashrom/include"],
 }
 
 rust_defaults {
     name: "libflashrom_defaults",
     edition: "2021",
-    static_libs: [
+    whole_static_libs: [
         "libflashrom_log_c",
+    ],
+    static_libs: [
         "libpci",
     ],
     shared_libs: [
