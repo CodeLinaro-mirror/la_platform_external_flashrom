@@ -1088,7 +1088,7 @@ mod tests {
         use nix::fcntl::{fcntl, FcntlArg, OFlag};
         use nix::sys::wait::{waitpid, WaitStatus};
         use nix::unistd::{fork, pipe, read, write, ForkResult};
-        use std::os::fd::{AsFd, AsRawFd};
+        use std::os::fd::AsFd;
         use std::panic;
 
         // Ignore poison error to prevent one test failure from bringing down the entire suite
@@ -1099,11 +1099,10 @@ mod tests {
             Ok(ForkResult::Parent { child, .. }) => {
                 drop(write_fd);
 
-                let flags =
-                    fcntl(read_fd.as_raw_fd(), FcntlArg::F_GETFL).expect("Failed to get flags");
+                let flags = fcntl(&read_fd, FcntlArg::F_GETFL).expect("Failed to get flags");
                 let mut non_blocking_flags = OFlag::from_bits_truncate(flags);
                 non_blocking_flags.insert(OFlag::O_NONBLOCK);
-                fcntl(read_fd.as_raw_fd(), FcntlArg::F_SETFL(non_blocking_flags))
+                fcntl(&read_fd, FcntlArg::F_SETFL(non_blocking_flags))
                     .expect("Failed to set non-blocking");
 
                 let status = waitpid(child, None).expect("waitpid failed");
@@ -1112,7 +1111,7 @@ mod tests {
                     WaitStatus::Exited(_, 0) => {} // Success
                     WaitStatus::Exited(_, 101) => {
                         let mut buf = [0; 4096];
-                        match read(read_fd.as_raw_fd(), &mut buf) {
+                        match read(&read_fd, &mut buf) {
                             Ok(bytes_read) if bytes_read > 0 => {
                                 let panic_message = String::from_utf8_lossy(&buf[..bytes_read]);
                                 panic!(
