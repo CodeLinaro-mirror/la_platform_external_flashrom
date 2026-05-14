@@ -92,6 +92,18 @@ struct io_mock {
 					unsigned char *data,
 					uint16_t wLength,
 					unsigned int timeout);
+	int (*libusb_bulk_transfer)(void *state,
+					libusb_device_handle *devh,
+					unsigned char endpoint,
+					unsigned char *data,
+					int length,
+					int *actual_length,
+					unsigned int timeout);
+	int (*libusb_get_string_descriptor_ascii)(void *state,
+					libusb_device_handle *devh,
+					uint8_t desc_index,
+					unsigned char *data,
+					int length);
 	ssize_t (*libusb_get_device_list)(void *state, libusb_context *, libusb_device ***list);
 	void (*libusb_free_device_list)(void *state, libusb_device **list, int unref_devices);
 	int (*libusb_get_device_descriptor)(void *state, libusb_device *, struct libusb_device_descriptor *);

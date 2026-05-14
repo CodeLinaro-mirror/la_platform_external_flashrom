@@ -44,6 +44,11 @@ int __wrap_libusb_claim_interface(libusb_device_handle *devh, int interface_numb
 int __wrap_libusb_control_transfer(libusb_device_handle *devh, uint8_t bmRequestType,
 		uint8_t bRequest, uint16_t wValue, uint16_t wIndex, unsigned char *data,
 		uint16_t wLength, unsigned int timeout);
+int __wrap_libusb_bulk_transfer(libusb_device_handle *devh, unsigned char endpoint,
+		unsigned char *data, int length, int *actual_length, unsigned int timeout);
+int __wrap_libusb_get_string_descriptor_ascii(libusb_device_handle *devh,
+		uint8_t desc_index, unsigned char *data, int length);
+int __wrap_libusb_reset_device(libusb_device_handle *devh);
 int __wrap_libusb_release_interface(libusb_device_handle *devh, int interface_number);
 void __wrap_libusb_close(libusb_device_handle *devh);
 libusb_device *__wrap_libusb_ref_device(libusb_device *dev);

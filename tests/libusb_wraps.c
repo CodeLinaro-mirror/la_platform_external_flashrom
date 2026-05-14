@@ -163,6 +163,34 @@ int __wrap_libusb_control_transfer(libusb_device_handle *devh, uint8_t bmRequest
 	return 0;
 }
 
+int __wrap_libusb_bulk_transfer(libusb_device_handle *devh, unsigned char endpoint,
+		unsigned char *data, int length, int *actual_length, unsigned int timeout)
+{
+	LOG_ME;
+	if (get_io() && get_io()->libusb_bulk_transfer)
+		return get_io()->libusb_bulk_transfer(get_io()->state,
+				devh, endpoint, data, length, actual_length, timeout);
+	if (actual_length)
+		*actual_length = 0;
+	return 0;
+}
+
+int __wrap_libusb_get_string_descriptor_ascii(libusb_device_handle *devh,
+		uint8_t desc_index, unsigned char *data, int length)
+{
+	LOG_ME;
+	if (get_io() && get_io()->libusb_get_string_descriptor_ascii)
+		return get_io()->libusb_get_string_descriptor_ascii(get_io()->state,
+				devh, desc_index, data, length);
+	return 0;
+}
+
+int __wrap_libusb_reset_device(libusb_device_handle *devh)
+{
+	LOG_ME;
+	return 0;
+}
+
 int __wrap_libusb_release_interface(libusb_device_handle *devh, int interface_number)
 {
 	LOG_ME;
