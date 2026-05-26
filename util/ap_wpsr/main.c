@@ -123,23 +123,23 @@ static const char *get_wp_error_str(int err)
 
 void chip_4ba_feature_decode(const uint32_t feature_bits)
 {
-	if (feature_bits | FEATURE_4BA_ENTER)
+	if (feature_bits & FEATURE_4BA_ENTER)
 	       printf(" > Can enter/exit 4BA mode with instructions 0xb7/0xe9 w/o WREN\n");
-	if (feature_bits | FEATURE_4BA_ENTER_WREN)
+	if (feature_bits & FEATURE_4BA_ENTER_WREN)
 		printf(" > Can enter/exit 4BA mode with instructions 0xb7/0xe9 after WREN\n");
-	if (feature_bits | FEATURE_4BA_ENTER_EAR7)
+	if (feature_bits & FEATURE_4BA_ENTER_EAR7)
 		printf(" > Can enter/exit 4BA mode by setting bit7 of the ext addr reg\n");
-	if (feature_bits | FEATURE_4BA_EAR_C5C8)
-		printf(" > Regular 3-byte operations can be used by writing the most"\
-				"significant address byte into an extended address register"\
-				"(using 0xc5/0xc8 instructions).\n");
-	if (feature_bits | FEATURE_4BA_EAR_1716)
+	if (feature_bits & FEATURE_4BA_EAR_C5C8)
+		printf(" > Regular 3-byte operations can be used by writing the most "
+		       "significant address byte into an extended address register "
+		       "(using 0xc5/0xc8 instructions).\n");
+	if (feature_bits & FEATURE_4BA_EAR_1716)
 		printf(" > Like FEATURE_4BA_EAR_C5C8 but with 0x17/0x16 instructions.\n");
-	if (feature_bits | FEATURE_4BA_READ)
+	if (feature_bits & FEATURE_4BA_READ)
 		printf(" > Native 4BA read instruction (0x13) is supported.\n");
-	if (feature_bits | FEATURE_4BA_FAST_READ)
+	if (feature_bits & FEATURE_4BA_FAST_READ)
 		printf(" > Native 4BA fast read instruction (0x0c) is supported.\n");
-	if (feature_bits | FEATURE_4BA_WRITE)
+	if (feature_bits & FEATURE_4BA_WRITE)
 		printf(" > Native 4BA byte program (0x12) is supported.\n");
 	putchar('\n');
 }
