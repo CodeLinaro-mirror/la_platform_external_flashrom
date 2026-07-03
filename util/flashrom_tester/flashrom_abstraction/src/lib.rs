@@ -164,6 +164,18 @@ pub trait Flashrom {
         path: &Path,
         region: &str,
         layout: &Path,
+    ) -> Result<bool, FlashromError> {
+        self.write_from_file_regions(path, &[region], layout)
+    }
+
+    /// Write multiple regions of the flash.
+    /// `path` is a file of the size of the whole flash.
+    /// The `regions` names correspond to region names in the `layout` file, not the flash.
+    fn write_from_file_regions(
+        &self,
+        path: &Path,
+        regions: &[&str],
+        layout: &Path,
     ) -> Result<bool, FlashromError>;
 
     /// Verify the whole flash against the file specified by `path`.

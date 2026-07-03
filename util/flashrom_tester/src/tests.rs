@@ -269,10 +269,9 @@ fn verify_fail_test(env: &mut TestEnv) -> TestResult {
     }
 }
 
-/// Identifies `WP_RO` and a writable RW region (e.g. `RW_MISC` or `RW_SECTION_A`) via FMAP,
-/// then verifies protection on `WP_RO` while allowing writes to the RW region.
-/// This acts as a partial lock test that doesn't rely on generic top/bottom boundaries,
-/// avoiding interference with regions like Intel ME.
+/// Identifies `WP_RO` and all top-level writable RW regions via FMAP,
+/// then verifies protection on `WP_RO` while allowing writes to the RW regions.
+/// This acts as a comprehensive lock test avoiding interference with regions like Intel ME.
 fn lock_ro_write_rw_test(env: &mut TestEnv) -> TestResult {
     env.ensure_golden()?;
 
@@ -295,12 +294,11 @@ fn lock_ro_write_rw_test(env: &mut TestEnv) -> TestResult {
     let (wp_ro_offset, wp_ro_size) = utils::find_fmap_region(&fmap_data, "WP_RO")
         .map_err(|e| format!("Could not find WP_RO in FMAP: {}", e))?;
 
-    // 2. Find a suitable RW region to test write success on (avoiding ME)
-    let rw_region_candidates = ["RW_MISC", "RW_SECTION_A", "RW_LEGACY"];
-    let (rw_offset, rw_size) = rw_region_candidates
-        .iter()
-        .find_map(|candidate| utils::find_fmap_region(&fmap_data, candidate).ok())
-        .ok_or("Could not find any suitable RW region (like RW_MISC) in FMAP")?;
+    // 2. Find all top-level RW regions to test write success on (avoiding ME)
+    let top_level_rw_regions = utils::get_top_level_rw_regions(&fmap_data)?;
+    if top_level_rw_regions.is_empty() {
+        return Err("Could not find any suitable RW regions in FMAP".into());
+    }
 
     // 3. Create a dynamic layout file for this specific test
     let layout_path = Path::new("/tmp/layout_ro_rw_test.file");
@@ -311,13 +309,22 @@ fn lock_ro_write_rw_test(env: &mut TestEnv) -> TestResult {
         wp_ro_offset,
         wp_ro_offset + wp_ro_size - 1
     )?;
-    writeln!(
-        layout_file,
-        "{:06x}:{:06x} TEST_RW",
-        rw_offset,
-        rw_offset + rw_size - 1
-    )?;
+
+    for region in &top_level_rw_regions {
+        writeln!(
+            layout_file,
+            "{:06x}:{:06x} {}",
+            region.offset,
+            region.offset + region.size - 1,
+            region.name
+        )?;
+    }
     layout_file.flush()?;
+
+    let rw_region_name_refs: Vec<&str> = top_level_rw_regions
+        .iter()
+        .map(|r| r.name.as_str())
+        .collect();
 
     // 4. Configure WP
     env.wp.set_hw(false)?;
@@ -341,9 +348,9 @@ fn lock_ro_write_rw_test(env: &mut TestEnv) -> TestResult {
         return Err("Flash content changed even though WP_RO write returned an error!".into());
     }
 
-    // 6. Check that we CAN write to TEST_RW
+    // 6. Check that we CAN write to ALL top-level RW regions
     env.cmd
-        .write_from_file_region(env.random_data_file(), "TEST_RW", layout_path)?;
+        .write_from_file_regions(env.random_data_file(), &rw_region_name_refs, layout_path)?;
 
     Ok(())
 }

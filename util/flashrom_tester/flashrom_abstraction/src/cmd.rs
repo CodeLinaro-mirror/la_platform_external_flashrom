@@ -66,12 +66,12 @@ pub struct WPOpt {
 pub enum OperationArgs<'a> {
     /// The file is the whole chip.
     EntireChip(&'a Path),
-    /// File is the size of the full chip, limited to a single named region.
+    /// File is the size of the full chip, limited to multiple named regions.
     ///
     /// The required path is the file to use, and the optional path is a layout file
     /// specifying how to locate regions (if unspecified, flashrom will attempt
     /// to discover the layout itself).
-    FullFileRegion(&'a str, &'a Path, Option<&'a Path>),
+    FullFileRegions(&'a [&'a str], &'a Path, Option<&'a Path>),
     /// File is the size of the single named region only.
     ///
     /// The required path is the file to use, and the optional path is a layout file
@@ -145,15 +145,15 @@ impl crate::Flashrom for FlashromCmd {
         }
     }
 
-    fn write_from_file_region(
+    fn write_from_file_regions(
         &self,
         path: &Path,
-        region: &str,
+        regions: &[&str],
         layout: &Path,
     ) -> Result<bool, FlashromError> {
         let opts = FlashromOpt {
-            io_opt: Some(IOOpt::Write(OperationArgs::FullFileRegion(
-                region,
+            io_opt: Some(IOOpt::Write(OperationArgs::FullFileRegions(
+                regions,
                 path,
                 Some(layout),
             ))),
@@ -161,7 +161,7 @@ impl crate::Flashrom for FlashromCmd {
             ..Default::default()
         };
 
-        self.dispatch(opts, "write_file_with_layout")?;
+        self.dispatch(opts, "write_file_with_layout_multiple")?;
         Ok(true)
     }
 
@@ -340,23 +340,24 @@ fn flashrom_decode_opts(opts: FlashromOpt) -> Vec<OsString> {
 
     // io_opt
     fn add_operation_args(opts: OperationArgs, params: &mut Vec<OsString>) {
-        let (file, region, layout) = match opts {
-            OperationArgs::EntireChip(file) => (Some(file), None, None),
-            OperationArgs::FullFileRegion(region, file, layout) => {
-                (Some(file), Some(region.to_string()), layout)
+        let (file, regions_str, layout) = match opts {
+            OperationArgs::EntireChip(file) => (Some(file), vec![], None),
+            OperationArgs::FullFileRegions(regions, file, layout) => {
+                let regions_str = regions.iter().map(|&s| s.to_string()).collect();
+                (Some(file), regions_str, layout)
             }
             OperationArgs::RegionFileRegion(region, file, layout) => (
                 None,
-                Some(format!("{region}:{}", file.to_string_lossy())),
+                vec![format!("{region}:{}", file.to_string_lossy())],
                 layout,
             ),
         };
         if let Some(file) = file {
             params.push(file.into())
         }
-        if let Some(region) = region {
+        for region_str in regions_str {
             params.push("--include".into());
-            params.push(region.into())
+            params.push(region_str.into());
         }
         if let Some(layout) = layout {
             params.push("--layout".into());
@@ -552,8 +553,8 @@ mod tests {
         );
         test_io_opt(IOOpt::Erase, &["-E"]);
         test_io_opt(
-            IOOpt::Read(crate::cmd::OperationArgs::FullFileRegion(
-                "RO",
+            IOOpt::Read(crate::cmd::OperationArgs::FullFileRegions(
+                &["RO"],
                 Path::new("foo.bin"),
                 Some(Path::new("baz.bin")),
             )),

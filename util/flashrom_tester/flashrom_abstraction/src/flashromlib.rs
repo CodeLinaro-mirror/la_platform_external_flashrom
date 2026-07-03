@@ -128,18 +128,20 @@ impl crate::Flashrom for FlashromLib {
         Ok(())
     }
 
-    fn write_from_file_region(
+    fn write_from_file_regions(
         &self,
         path: &Path,
-        region: &str,
+        regions: &[&str],
         layout: &Path,
     ) -> Result<bool, FlashromError> {
         let buf = fs::read(layout).map_err(|error| error.to_string())?;
-        let buf = String::from_utf8(buf).unwrap();
+        let buf = String::from_utf8(buf).map_err(|e| e.to_string())?;
         let mut layout: libflashrom::Layout = buf
             .parse()
             .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
-        layout.include_region(region)?;
+        for region in regions {
+            layout.include_region(region)?;
+        }
         let mut buf = fs::read(path).map_err(|error| error.to_string())?;
         self.flashrom
             .borrow_mut()

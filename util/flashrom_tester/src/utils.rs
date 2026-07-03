@@ -197,9 +197,28 @@ pub fn translate_command_error(output: &std::process::Output) -> std::io::Error 
 ///     uint16_t flags;
 /// } __attribute__((packed));
 pub fn find_fmap_region(data: &[u8], region_name: &str) -> std::result::Result<(i64, i64), String> {
-    const SIGNATURE: &[u8] = b"__FMAP__";
+    parse_fmap_areas(data)?
+        .into_iter()
+        .find(|a| a.name == region_name)
+        .map(|a| {
+            info!(
+                "Found {} in FMAP: offset={:#x}, size={:#x}",
+                region_name, a.offset, a.size
+            );
+            (a.offset, a.size)
+        })
+        .ok_or_else(|| format!("Region {} not found in FMAP", region_name))
+}
 
-    // 1. Validate FMAP Header
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FmapArea {
+    pub name: String,
+    pub offset: i64,
+    pub size: i64,
+}
+
+pub fn parse_fmap_areas(data: &[u8]) -> std::result::Result<Vec<FmapArea>, String> {
+    const SIGNATURE: &[u8] = b"__FMAP__";
     if data.len() < 56 || &data[0..8] != SIGNATURE {
         return Err("Data does not start with a valid FMAP signature".into());
     }
@@ -217,7 +236,7 @@ pub fn find_fmap_region(data: &[u8], region_name: &str) -> std::result::Result<(
         return Err("FMAP contains zero areas".into());
     }
 
-    // 2. Iterate over Area Descriptors
+    let mut all_regions = Vec::with_capacity(nareas as usize);
     let mut current_offset = 56;
     for _ in 0..nareas {
         if current_offset + 42 > data.len() {
@@ -235,25 +254,63 @@ pub fn find_fmap_region(data: &[u8], region_name: &str) -> std::result::Result<(
                 .map_err(|_| "Failed to parse area size")?,
         ) as i64;
 
-        // Name is 32 bytes, null-padded
         let name_at = current_offset + 8;
         let name_bytes = &data[name_at..name_at + 32];
-
         let null_pos = name_bytes.iter().position(|&c| c == 0).unwrap_or(32);
-        let area_name = String::from_utf8_lossy(&name_bytes[0..null_pos]);
+        let area_name = String::from_utf8_lossy(&name_bytes[0..null_pos]).to_string();
 
-        if area_name == region_name {
-            info!(
-                "Found {} in FMAP: offset={:#x}, size={:#x}",
-                region_name, area_offset, area_size
-            );
-            return Ok((area_offset, area_size));
-        }
+        all_regions.push(FmapArea {
+            name: area_name,
+            offset: area_offset,
+            size: area_size,
+        });
 
         current_offset += 42;
     }
 
-    Err(format!("Region {} not found in FMAP", region_name))
+    Ok(all_regions)
+}
+
+pub fn get_top_level_rw_regions(data: &[u8]) -> std::result::Result<Vec<FmapArea>, String> {
+    let all_regions = parse_fmap_areas(data)?;
+
+    // Filter to RW_ regions
+    let rw_regions: Vec<_> = all_regions
+        .into_iter()
+        .filter(|r| r.name.starts_with("RW_"))
+        .collect();
+
+    // Keep top-level only
+    let top_level: Vec<_> = rw_regions
+        .iter()
+        .filter(|r1| {
+            !rw_regions.iter().any(|r2| {
+                if r1.name == r2.name {
+                    false
+                } else if r1.offset == r2.offset && r1.size == r2.size {
+                    r2.name < r1.name
+                } else {
+                    r2.offset <= r1.offset && (r2.offset + r2.size) >= (r1.offset + r1.size)
+                }
+            })
+        })
+        .cloned()
+        .collect();
+
+    let names: Vec<&str> = top_level.iter().map(|r| r.name.as_str()).collect();
+    info!(
+        "Selected {} top-level RW regions from FMAP: {:?}",
+        top_level.len(),
+        names
+    );
+    for r in &top_level {
+        debug!(
+            "  -> {}: offset={:#x}, size={:#x}",
+            r.name, r.offset, r.size
+        );
+    }
+
+    Ok(top_level)
 }
 
 #[cfg(test)]
@@ -364,5 +421,163 @@ mod tests {
         let mut data_not_at_start = vec![0u8; 1000];
         data_not_at_start[10..18].copy_from_slice(b"__FMAP__");
         assert!(super::find_fmap_region(&data_not_at_start, "WP_RO").is_err());
+    }
+
+    #[test]
+    fn test_get_top_level_rw_regions() {
+        let mut data = vec![0u8; 1000];
+        // Write signature at the beginning
+        data[0..8].copy_from_slice(b"__FMAP__");
+        data[8] = 1;
+        data[9] = 1;
+        // Write nareas (5)
+        data[54..56].copy_from_slice(&5u16.to_le_bytes());
+
+        let mut offset = 56;
+        let mut add_area = |name: &str, area_offset: u32, area_size: u32| {
+            let mut area = vec![0u8; 42];
+            area[0..4].copy_from_slice(&area_offset.to_le_bytes());
+            area[4..8].copy_from_slice(&area_size.to_le_bytes());
+            area[8..8 + name.len()].copy_from_slice(name.as_bytes());
+            data[offset..offset + 42].copy_from_slice(&area);
+            offset += 42;
+        };
+
+        // Area 1: WP_RO (Should be ignored since it doesn't start with RW_)
+        add_area("WP_RO", 0x1000, 0x2000);
+        // Area 2: RW_SECTION_A (Top-level RW region)
+        add_area("RW_SECTION_A", 0x4000, 0x2000);
+        // Area 3: RW_FWID_A (Child of RW_SECTION_A, should be filtered out)
+        add_area("RW_FWID_A", 0x4100, 0x100);
+        // Area 4: RW_SECTION_B (Another top-level RW region)
+        add_area("RW_SECTION_B", 0x8000, 0x2000);
+        // Area 5: SI_ME (Should be ignored)
+        add_area("SI_ME", 0xA000, 0x1000);
+
+        let top_level = super::get_top_level_rw_regions(&data).unwrap();
+        assert_eq!(top_level.len(), 2);
+
+        // Verify RW_SECTION_A was found and RW_FWID_A was filtered out
+        let a = top_level.iter().find(|r| r.name == "RW_SECTION_A").unwrap();
+        assert_eq!(a.offset, 0x4000);
+        assert_eq!(a.size, 0x2000);
+        assert!(!top_level.iter().any(|r| r.name == "RW_FWID_A"));
+
+        // Verify RW_SECTION_B was found
+        let b = top_level.iter().find(|r| r.name == "RW_SECTION_B").unwrap();
+        assert_eq!(b.offset, 0x8000);
+        assert_eq!(b.size, 0x2000);
+    }
+
+    #[test]
+    fn test_get_top_level_rw_regions_empty() {
+        let mut data = vec![0u8; 1000];
+        // Write signature at the beginning
+        data[0..8].copy_from_slice(b"__FMAP__");
+        data[8] = 1;
+        data[9] = 1;
+        // Write nareas (2)
+        data[54..56].copy_from_slice(&2u16.to_le_bytes());
+
+        let mut offset = 56;
+        let mut add_area = |name: &str, area_offset: u32, area_size: u32| {
+            let mut area = vec![0u8; 42];
+            area[0..4].copy_from_slice(&area_offset.to_le_bytes());
+            area[4..8].copy_from_slice(&area_size.to_le_bytes());
+            area[8..8 + name.len()].copy_from_slice(name.as_bytes());
+            data[offset..offset + 42].copy_from_slice(&area);
+            offset += 42;
+        };
+
+        // Area 1: WP_RO
+        add_area("WP_RO", 0x1000, 0x2000);
+        // Area 2: SI_ME
+        add_area("SI_ME", 0x4000, 0x1000);
+
+        // Should successfully parse but return an empty vector
+        let top_level = super::get_top_level_rw_regions(&data).unwrap();
+        assert!(top_level.is_empty());
+    }
+
+    #[test]
+    fn test_get_top_level_rw_regions_identical_span_alias() {
+        let mut data = vec![0u8; 1000];
+        // Write signature at the beginning
+        data[0..8].copy_from_slice(b"__FMAP__");
+        data[8] = 1;
+        data[9] = 1;
+        // Write nareas (3)
+        data[54..56].copy_from_slice(&3u16.to_le_bytes());
+
+        let mut offset = 56;
+        let mut add_area = |name: &str, area_offset: u32, area_size: u32| {
+            let mut area = vec![0u8; 42];
+            area[0..4].copy_from_slice(&area_offset.to_le_bytes());
+            area[4..8].copy_from_slice(&area_size.to_le_bytes());
+            area[8..8 + name.len()].copy_from_slice(name.as_bytes());
+            data[offset..offset + 42].copy_from_slice(&area);
+            offset += 42;
+        };
+
+        // Area 1: RW_SECTION_A (Alias 1 of range 0x4000..0x6000)
+        add_area("RW_SECTION_A", 0x4000, 0x2000);
+        // Area 2: RW_LEGACY (Alias 2 of range 0x4000..0x6000)
+        add_area("RW_LEGACY", 0x4000, 0x2000);
+        // Area 3: RW_FWID_A (Child inside 0x4000..0x6000, should be filtered out)
+        add_area("RW_FWID_A", 0x4100, 0x100);
+
+        let top_level = super::get_top_level_rw_regions(&data).unwrap();
+        assert_eq!(top_level.len(), 1);
+
+        // Since RW_LEGACY < RW_SECTION_A lexicographically, RW_LEGACY should be preserved
+        // and they should not mutually eliminate each other.
+        assert_eq!(top_level[0].name, "RW_LEGACY");
+        assert_eq!(top_level[0].offset, 0x4000);
+        assert_eq!(top_level[0].size, 0x2000);
+    }
+
+    #[test]
+    fn test_parse_fmap_areas() {
+        let mut data = vec![0u8; 200];
+        data[0..8].copy_from_slice(b"__FMAP__");
+        data[8] = 1;
+        data[9] = 1;
+        data[54..56].copy_from_slice(&2u16.to_le_bytes());
+
+        let mut offset = 56;
+        let mut add_area = |name: &str, area_offset: u32, area_size: u32| {
+            let mut area = vec![0u8; 42];
+            area[0..4].copy_from_slice(&area_offset.to_le_bytes());
+            area[4..8].copy_from_slice(&area_size.to_le_bytes());
+            area[8..8 + name.len()].copy_from_slice(name.as_bytes());
+            data[offset..offset + 42].copy_from_slice(&area);
+            offset += 42;
+        };
+
+        add_area("WP_RO", 0x1000, 0x2000);
+        add_area("RW_SECTION_A", 0x4000, 0x2000);
+
+        let areas = super::parse_fmap_areas(&data).unwrap();
+        assert_eq!(areas.len(), 2);
+        assert_eq!(
+            areas[0],
+            FmapArea {
+                name: "WP_RO".to_string(),
+                offset: 0x1000,
+                size: 0x2000,
+            }
+        );
+        assert_eq!(
+            areas[1],
+            FmapArea {
+                name: "RW_SECTION_A".to_string(),
+                offset: 0x4000,
+                size: 0x2000,
+            }
+        );
+
+        // Test signature error
+        data[0] = b'X';
+        assert!(super::parse_fmap_areas(&data).is_err());
     }
 }
