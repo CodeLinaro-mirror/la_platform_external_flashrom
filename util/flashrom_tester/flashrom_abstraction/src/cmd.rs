@@ -440,9 +440,10 @@ fn parse_wp_status_output(stdout: &str) -> Result<(bool, (i64, i64)), String> {
         s if s.contains("Protection mode: disable") => false,
         _ => return Err(format!("Unknown protection mode in wp_status: {}", stdout)),
     };
-    let re =
-        Regex::new(r"Protection range:\s*start=0x(?P<start>[0-9a-fA-F]+)\s+length=0x(?P<length>[0-9a-fA-F]+)")
-            .unwrap();
+    let re = Regex::new(
+        r"Protection range:\s*start=0x(?P<start>[0-9a-fA-F]+)\s+length=0x(?P<length>[0-9a-fA-F]+)",
+    )
+    .unwrap();
     let captures = re
         .captures(stdout)
         .ok_or_else(|| format!("No match found in wp_status: {}", stdout))?;
@@ -631,7 +632,7 @@ mod tests {
         // SW WP enabled (lower 1/2)
         assert_eq!(
             parse_wp_status_output(
-r#"flashrom v1.6.0-devel on Linux 5.15.0-stub (aarch64)
+                r#"flashrom v1.6.0-devel on Linux 5.15.0-stub (aarch64)
 flashrom is free software, get the source code at https://flashrom.org
 
 Using default programmer "internal" with arguments "".
@@ -647,7 +648,7 @@ SUCCESS"#
         // SW WP enabled (upper 1/2)
         assert_eq!(
             parse_wp_status_output(
-r#"flashrom v1.6.0-devel on Linux 5.15.0-stub (aarch64)
+                r#"flashrom v1.6.0-devel on Linux 5.15.0-stub (aarch64)
 flashrom is free software, get the source code at https://flashrom.org
 
 Using default programmer "internal" with arguments "".
@@ -663,7 +664,7 @@ SUCCESS"#
         // SW WP disabled
         assert_eq!(
             parse_wp_status_output(
-r#"flashrom v1.6.0-devel on Linux 5.15.0-stub (aarch64)
+                r#"flashrom v1.6.0-devel on Linux 5.15.0-stub (aarch64)
 flashrom is free software, get the source code at https://flashrom.org
 
 Using default programmer "internal" with arguments "".
@@ -678,7 +679,7 @@ SUCCESS"#
 
         // Unsupported protection mode (permanent)
         assert!(parse_wp_status_output(
-r#"flashrom v1.6.0-devel on Linux 5.15.0-stub (aarch64)
+            r#"flashrom v1.6.0-devel on Linux 5.15.0-stub (aarch64)
 flashrom is free software, get the source code at https://flashrom.org
 
 Using default programmer "internal" with arguments "".
@@ -687,24 +688,26 @@ Found Programmer flash chip "Opaque flash chip" (8192 kB, Programmer-specific) o
 Protection range: start=0x00000000 length=0x00000000 (none)
 Protection mode: permanent
 SUCCESS"#
-        ).is_err());
+        )
+        .is_err());
 
         // Missing protection mode
         assert!(parse_wp_status_output(
-r#"Protection range: start=0x00400000 length=0x00400000 (upper 1/2)
+            r#"Protection range: start=0x00400000 length=0x00400000 (upper 1/2)
 SUCCESS"#
         )
         .is_err());
 
         // Missing range
         assert!(parse_wp_status_output(
-r#"Protection mode: hardware
+            r#"Protection mode: hardware
 SUCCESS"#
-        ).is_err());
+        )
+        .is_err());
 
         // Malformed hex string
         assert!(parse_wp_status_output(
-r#"Protection range: start=0xXYZ length=0x00400000 (none)
+            r#"Protection range: start=0xXYZ length=0x00400000 (none)
 Protection mode: hardware
 SUCCESS"#
         )

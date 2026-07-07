@@ -178,8 +178,6 @@ fn wp_region_list_test(env: &mut TestEnv) -> TestResult {
     Ok(())
 }
 
-
-
 /// Verify that enabling hardware write protect prevents disabling software write protect.
 fn hwwp_locks_swwp_test(env: &mut TestEnv) -> TestResult {
     if !env.wp.can_control_hw_wp() {
@@ -252,8 +250,6 @@ fn host_is_chrome_test(_env: &mut TestEnv) -> TestResult {
         }
     }
 }
-
-
 
 /// Check that flashrom 'verify' will fail if the provided data does not match the chip data.
 fn verify_fail_test(env: &mut TestEnv) -> TestResult {

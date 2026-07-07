@@ -37,8 +37,6 @@ use std::convert::TryInto;
 use std::io::prelude::*;
 use std::process::Command;
 
-
-
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct LayoutSizes {
     half_sz: i64,
@@ -71,8 +69,6 @@ pub fn get_layout_sizes(rom_sz: i64) -> Result<LayoutSizes, String> {
         top_eighth_bottom: (rom_sz / 8) * 7,
     })
 }
-
-
 
 pub fn construct_layout_file<F: Write>(mut target: F, ls: &LayoutSizes) -> std::io::Result<()> {
     writeln!(target, "000000:{:x} BOTTOM_EIGHTH", ls.bottom_eighth_top)?;
