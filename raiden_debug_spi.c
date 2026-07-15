@@ -919,6 +919,7 @@ static int send_command_v1(const struct flashctx *flash,
 				/* Reattempting will not result in a recovery. */
 				return status;
 			}
+			libusb_clear_halt(ctx_data->dev->handle, ctx_data->out_ep);
 			default_delay(RETRY_INTERVAL_US);
 			continue;
 		}
@@ -954,6 +955,9 @@ static int send_command_v1(const struct flashctx *flash,
 				/* Reattempting will not result in a recovery. */
 				return status;
 			}
+			msg_pdbg("Raiden: Clearing IN halt and draining interface on read retry\n");
+			libusb_clear_halt(ctx_data->dev->handle, ctx_data->in_ep);
+			drain_usb_interface(ctx_data->dev, ctx_data->in_ep);
 			default_delay(RETRY_INTERVAL_US);
 		}
 	}
@@ -1267,6 +1271,7 @@ static int send_command_v2(const struct flashctx *flash,
 				/* Reattempting will not result in a recovery. */
 				return status;
 			}
+			libusb_clear_halt(ctx_data->dev->handle, ctx_data->out_ep);
 			default_delay(RETRY_INTERVAL_US);
 			continue;
 		}
@@ -1302,8 +1307,19 @@ static int send_command_v2(const struct flashctx *flash,
 					/* Reattempting will not result in a recovery. */
 					return status;
 				}
+				msg_pdbg("Raiden: Clearing IN halt and draining interface on read retry\n");
+				libusb_clear_halt(ctx_data->dev->handle, ctx_data->in_ep);
+				drain_usb_interface(ctx_data->dev, ctx_data->in_ep);
+
+				/* Ensure OUT endpoint is clean before sending restart command. */
+				libusb_clear_halt(ctx_data->dev->handle, ctx_data->out_ep);
+
 				/* Device needs to reset its transmit index. */
-				restart_response_v2(ctx_data);
+				int restart_status = restart_response_v2(ctx_data);
+				if (restart_status) {
+					msg_pwarn("Raiden: Failed to send restart response command (status = 0x%05x)\n",
+						  restart_status);
+				}
 				default_delay(RETRY_INTERVAL_US);
 			}
 		}
