@@ -55,6 +55,22 @@ These steps should be followed to find the flashrom chip name for your chip:
   patch to upstream flashrom for review.
 * Pass the matching entry's name to the tool via the `-n` option.
 
+JEDEC ID collision resolution
+-----------------------------
+
+When invoking `ap_wpsr` with `--jedec_id` instead of `--name`, multiple chip
+entries may share the same JEDEC ID (e.g. GD25LQ255E vs. GD25LQ256H sharing
+`0xC86019`). To select the correct status register topology, `ap_wpsr`
+resolves collisions using the following precedence:
+
+* **Environment variable override**: Set `AP_WPSR_PARTNAME=<partname>` (e.g.
+  `gd25lq256h`).
+* **Runtime sysfs probing**: On live devices, `ap_wpsr` automatically
+  inspects `/sys/class/mtd/mtd0/device/spi-nor/partname` (or a file override
+  via `AP_WPSR_PARTNAME_FILE`).
+* **Default fallback**: When neither an override nor a live partname is
+  available, `ap_wpsr` falls back to the default chip entry for that JEDEC ID.
+
 src structure
 -------------
 

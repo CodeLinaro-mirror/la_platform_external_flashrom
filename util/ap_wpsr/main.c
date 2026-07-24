@@ -15,13 +15,16 @@
  *
  */
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <getopt.h>
 
 #include "flash.h"
+#include "flashchips.h"
 #include "programmer.h"
 #include "libflashrom.h"
 #include "writeprotect.h"
@@ -30,10 +33,123 @@
 static const struct flashchip *find_chip_by_name(const char *name)
 {
 	for (const struct flashchip *chip = flashchips; chip && chip->name; chip++)
-		if (!strcmp(chip->name, name))
+		if (!strcasecmp(chip->name, name))
 			return chip;
 	return NULL;
 }
+
+/*
+ * Fixup mechanism for JEDEC ID collisions.
+ * When offline tools or automated test scripts (e.g. GscUtils.kt) invoke ap_wpsr with only
+ * --jedec_id=0xc86019, multiple flash models (GD25LQ255E, GD25LQ256H, etc.) share the
+ * exact same JEDEC ID despite requiring different status register layouts.
+ *
+ * This fixup mechanism supports resolution tiers for JEDEC ID collisions:
+ * 1. Direct environment variable: `AP_WPSR_PARTNAME=<partname>`.
+ * 2. Runtime sysfs probing: automatically reading `/sys/class/mtd/mtd0/device/spi-nor/partname`
+ *    (or file path override via `AP_WPSR_PARTNAME_FILE`).
+ */
+struct ap_wpsr_fixup {
+	uint8_t manufacture_id;
+	uint16_t model_id;
+	/*
+	 * Hook called when this JEDEC ID (`manufacture_id`/`model_id`) is encountered.
+	 * Returns the specific chip name (e.g., "GD25LQ256H" or "GD25LQ255E") if resolved
+	 * via environment override or sysfs partname probing, or NULL if unresolved.
+	 * If `probed_buf` is provided, it returns the actual probed/override string for debugging.
+	 */
+	const char *(*resolve_chip_name)(uint8_t manufacture_id, uint16_t model_id, char *probed_buf, size_t buf_len);
+	/*
+	 * Default fallback chip name to select when multiple non-duplicate entries
+	 * share this JEDEC ID and runtime probing returns NULL (e.g. during offline host calculations).
+	 */
+	const char *default_fallback_name;
+};
+
+static char *trim_ws(char *str)
+{
+	if (!str)
+		return NULL;
+	while (isspace((unsigned char)*str))
+		str++;
+	size_t len = strlen(str);
+	while (len > 0 && isspace((unsigned char)str[len - 1]))
+		str[--len] = '\0';
+	return str;
+}
+
+/*
+ * Map Linux kernel spi-nor partnames (e.g., "gd25lq256h", "gd25lq255e") to flashrom chip names.
+ * Explicit ad-hoc mapping is required because kernel partnames do not map 1-to-1 with flashrom
+ * chip names, which may combine variants using slashes (e.g., "GD25LB256F/GD25LR256F").
+ * Note: For partnames without explicit WP register mask definitions in flashrom (e.g. "gd25lb256f"),
+ * return NULL so that the caller falls back to default_fallback_name ("GD25LQ255E").
+ */
+static const char *map_gd25lq256_partname(const char *partname)
+{
+	if (!partname)
+		return NULL;
+
+	if (!strcasecmp(partname, "gd25lq256h"))
+		return "GD25LQ256H";
+	if (!strcasecmp(partname, "gd25lq255e"))
+		return "GD25LQ255E";
+
+	return NULL;
+}
+
+static const char *fixup_resolve_gd25lq256_collision(uint8_t manufacture_id, uint16_t model_id, char *probed_buf, size_t buf_len)
+{
+	char local_buf[256];
+	char *buf = (probed_buf && buf_len > 0) ? probed_buf : local_buf;
+	size_t len = (probed_buf && buf_len > 0) ? buf_len : sizeof(local_buf);
+
+	buf[0] = '\0';
+
+	/* 1. Direct environment variable string override (e.g. AP_WPSR_PARTNAME="GD25LQ256H") */
+	const char *env_name = getenv("AP_WPSR_PARTNAME");
+	if (env_name && env_name[0] != '\0') {
+		snprintf(buf, len, "%s", env_name);
+		char *trimmed = trim_ws(buf);
+		return map_gd25lq256_partname(trimmed);
+	}
+
+	/* 2. Probing sysfs files or file path overrides */
+	const char *env_file = getenv("AP_WPSR_PARTNAME_FILE");
+	const char *sysfs_paths[] = {
+		env_file,
+		"/sys/class/mtd/mtd0/device/spi-nor/partname",
+	};
+
+	for (size_t i = 0; i < ARRAY_SIZE(sysfs_paths); i++) {
+		if (!sysfs_paths[i])
+			continue;
+		FILE *fp = fopen(sysfs_paths[i], "r");
+		if (!fp)
+			continue;
+		char *res = fgets(buf, len, fp);
+		fclose(fp);
+		if (res) {
+			char *trimmed = trim_ws(buf);
+			/*
+			 * Stop immediately once a partname is read from an override file or sysfs.
+			 * Falling through to real sysfs could silently override test intents.
+			 */
+			return map_gd25lq256_partname(trimmed);
+		}
+	}
+	return NULL;
+}
+
+static const struct ap_wpsr_fixup ap_wpsr_fixups[] = {
+	{
+		.manufacture_id = GIGADEVICE_ID, /* 0xc8 */
+		.model_id = GIGADEVICE_GD25LQ255E, /* 0x6019 */
+		.resolve_chip_name = fixup_resolve_gd25lq256_collision,
+		.default_fallback_name = "GD25LQ255E",
+	},
+	{ 0, 0, NULL, NULL }
+};
 
 static const struct flashchip *find_chip_by_jedec_id(unsigned long long jedec_id)
 {
@@ -75,6 +191,38 @@ static const struct flashchip *find_chip_by_jedec_id(unsigned long long jedec_id
 	manufacture_id = jedec_bytes[id_start_idx];
 	/* The next two bytes are the model ID. */
 	model_id = (jedec_bytes[id_start_idx + 1] << 8) | jedec_bytes[id_start_idx + 2];
+
+	/* Check for JEDEC ID collision fixups and runtime resolutions before standard db scan */
+	for (const struct ap_wpsr_fixup *f = ap_wpsr_fixups; f && (f->manufacture_id || f->model_id); f++) {
+		if (f->manufacture_id == manufacture_id && f->model_id == model_id) {
+			char probed_name[256] = {0};
+			if (f->resolve_chip_name) {
+				const char *resolved = f->resolve_chip_name(manufacture_id, model_id, probed_name, sizeof(probed_name));
+				if (resolved) {
+					const struct flashchip *c = find_chip_by_name(resolved);
+					if (c) {
+						printf(" > [fixup] Resolved JEDEC ID 0x%llx (probed partname: '%s') to chip: '%s'\n",
+						       jedec_id, probed_name[0] ? probed_name : "unknown", resolved);
+						return c;
+					}
+				}
+			}
+			if (f->default_fallback_name) {
+				const struct flashchip *c = find_chip_by_name(f->default_fallback_name);
+				if (c) {
+					if (probed_name[0]) {
+						printf(" > [fixup] Probed partname '%s' (via env/sysfs) did not match target for JEDEC ID 0x%llx. Using default fallback: '%s'\n",
+						       probed_name, jedec_id, f->default_fallback_name);
+					} else {
+						printf(" > [fixup] Multiple chips share JEDEC ID 0x%llx (no partname detected). Using default fallback: '%s'\n",
+						       jedec_id, f->default_fallback_name);
+					}
+					return c;
+				}
+			}
+			break;
+		}
+	}
 
 	/*
 	 * The Extended Device ID bytes that may follow the model ID are currently
@@ -310,8 +458,8 @@ int main(int argc, char* argv[])
 			fprintf(stderr, " no match found for jedec id 0x%llx in chip db.\n", jedec_id);
 			return 1;
 		}
-		printf(" > found match for JEDEC ID 0x%llx: '%s' in chip db. (Manufacture: 0x%02x, Model: 0x%04x)\n\n",
-		       jedec_id, chip->name, chip->manufacture_id, chip->model_id);
+		printf(" > found match '%s' in chip db. (Manufacture: 0x%02x, Model: 0x%04x)\n\n",
+		       chip->name, chip->manufacture_id, chip->model_id);
 	}
 
 	enum flashrom_wp_result ret = print_wp_regmasks(chip, wp_start, wp_len);
