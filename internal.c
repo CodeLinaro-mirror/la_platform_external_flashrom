@@ -21,10 +21,17 @@
 
 #include "flash.h"
 #include "programmer.h"
+
+#ifndef CONFIG_INTERNAL_DIRECT_HW
+#define CONFIG_INTERNAL_DIRECT_HW 1
+#endif
+
+#if CONFIG_INTERNAL_DIRECT_HW == 1
 #include "platform/pci.h"
 
 #if defined(__i386__) || defined(__x86_64__)
 #include "hwaccess_x86_io.h"
+#endif
 #endif
 
 bool force_boardmismatch = false;
@@ -105,6 +112,7 @@ static int get_params(const struct programmer_cfg *cfg,
 	return 0;
 }
 
+#if CONFIG_INTERNAL_DIRECT_HW == 1
 static void report_nonwl_laptop_detected(const struct board_cfg *bcfg)
 {
 	const int is_laptop = bcfg->is_laptop;
@@ -138,6 +146,7 @@ static void report_nonwl_laptop_detected(const struct board_cfg *bcfg)
 		 "You have been warned.\n"
 		 "========================================================================\n");
 }
+#endif
 
 int internal_init(const struct programmer_cfg *cfg)
 {
@@ -146,12 +155,14 @@ int internal_init(const struct programmer_cfg *cfg)
 	bool not_a_laptop;
 	char *board_vendor;
 	char *board_model;
-#if defined(__i386__) || defined(__x86_64__)
+#if (defined(__i386__) || defined(__x86_64__)) && (CONFIG_INTERNAL_DIRECT_HW == 1)
 	const char *cb_vendor = NULL;
 	const char *cb_model = NULL;
 #endif
 	bool force_boardenable = false;
+#if CONFIG_INTERNAL_DIRECT_HW == 1
 	struct board_cfg bcfg = {0};
+#endif
 
 	ret = get_params(cfg,
 			 &force_boardenable, &force_boardmismatch,
@@ -171,6 +182,11 @@ int internal_init(const struct programmer_cfg *cfg)
 		goto internal_init_exit;
 	}
 
+#if CONFIG_INTERNAL_DIRECT_HW == 0
+	msg_perr("MTD initialization failed. Direct hardware (/dev/mem) fallback is disabled.\n");
+	ret = 1;
+	goto internal_init_exit;
+#else
 #if (defined (__i386__) || defined (__x86_64__) || defined(__amd64__))
 	/* Initialize PCI access for flash enables */
 	if (pci_init_common() != 0) {
@@ -265,6 +281,7 @@ int internal_init(const struct programmer_cfg *cfg)
 	report_nonwl_laptop_detected(&bcfg);
 
 	ret = 0;
+#endif /* CONFIG_INTERNAL_DIRECT_HW == 0 */
 
 internal_init_exit:
 	free(board_vendor);

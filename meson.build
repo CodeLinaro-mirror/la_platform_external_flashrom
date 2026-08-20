@@ -372,6 +372,7 @@ programmer = {
     'flags' : [
       '-DCONFIG_INTERNAL=1',
       '-DCONFIG_INTERNAL_DMI=' + (get_option('use_internal_dmi') ? '1' : '0'),
+      '-DCONFIG_INTERNAL_DIRECT_HW=' + (get_option('use_internal_direct_hw') ? '1' : '0'),
     ]
   },
   'it8212' : {
