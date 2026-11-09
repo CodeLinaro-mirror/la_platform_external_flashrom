@@ -23,11 +23,18 @@
  * https://api.cmocka.org/group__cmocka__alloc.html
  */
 
-extern void* _test_malloc(const size_t size, const char* file, const int line);
-extern void* _test_realloc(void *ptr, const size_t size, const char* file, const int line);
-extern void* _test_calloc(const size_t number_of_elements, const size_t size,
-                        const char* file, const int line);
-extern void _test_free(void* const ptr, const char* file, const int line);
+#ifndef CMOCKA_ALLOC_LINE_T
+#define CMOCKA_ALLOC_LINE_T int
+#endif
+
+extern void *_test_malloc(const size_t size, const char *file,
+                          const CMOCKA_ALLOC_LINE_T line);
+extern void *_test_realloc(void *ptr, const size_t size, const char *file,
+                           const CMOCKA_ALLOC_LINE_T line);
+extern void *_test_calloc(const size_t number_of_elements, const size_t size,
+                          const char *file, const CMOCKA_ALLOC_LINE_T line);
+extern void _test_free(void *const ptr, const char *file,
+                       const CMOCKA_ALLOC_LINE_T line);
 
 #ifdef malloc
 #undef malloc

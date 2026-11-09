@@ -774,6 +774,18 @@ if get_option('tests').auto() or get_option('tests').enabled()
     required : get_option('tests')
   )
 
+  cmocka_line_t = 'int'
+  if cmocka_dep.found() and cmocka_dep.type_name() != 'internal' and cc.compiles('''
+      #include <stdarg.h>
+      #include <stddef.h>
+      #include <stdint.h>
+      #include <setjmp.h>
+      #include <cmocka.h>
+      void *_test_malloc(const size_t size, const char *file, const size_t line);
+    ''', dependencies : cmocka_dep)
+    cmocka_line_t = 'size_t'
+  endif
+
   flashrom_test_dep = declare_dependency(
     include_directories : include_dir,
     sources : [
@@ -783,6 +795,7 @@ if get_option('tests').auto() or get_option('tests').enabled()
       'flashrom.c',
     ],
     compile_args : [
+      '-DCMOCKA_ALLOC_LINE_T=' + cmocka_line_t,
       '-includestdlib.h',
       '-includeunittest_env.h',
     ],
